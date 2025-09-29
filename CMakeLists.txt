@@ -35,6 +35,7 @@ add_executable(${PROGRAM_NAME}
 
 # https://datasheets.raspberrypi.com/pico/raspberry-pi-pico-c-sdk.pdf
 target_compile_definitions(${PROGRAM_NAME} PRIVATE
+  #PICO_STDIO_USB_CONNECT_WAIT_TIMEOUT_MS=5000
   PICO_STACK_SIZE=0x1000
   PICO_CORE1_STACK_SIZE=0x800
 )
@@ -62,14 +63,21 @@ pico_set_program_name(${PROGRAM_NAME} "${PROGRAM_NAME}")
 pico_set_program_version(${PROGRAM_NAME} "3.3.1")
 
 pico_enable_stdio_usb(${PROGRAM_NAME} 1)
+pico_enable_stdio_uart(${PROGRAM_NAME} 0)
 
 target_include_directories(${PROGRAM_NAME} PUBLIC 
         include/ 
 )
 target_link_libraries(${PROGRAM_NAME}
+    pico_stdlib
+    hardware_i2c
+    pico_multicore
+    pico_util 
+    hardware_spi
     sd_custom_driver
     hardware_clocks
     hardware_adc
+    hardware_pio
 )
 
 pico_add_extra_outputs(${PROGRAM_NAME})
