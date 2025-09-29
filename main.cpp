@@ -2,11 +2,18 @@
 #include <string.h>
 #include "pico/stdlib.h"
 #include "pico/multicore.h"
+#include "pico/util/queue.h"
+#include "pico/time.h"
 
 #include "ff.h"
 #include "sd_card.h"
 #include "f_util.h"
 #include "hw_config.h"
+
+// For IMU Logging 
+# include "icm20948.h"
+#include "pico/util/queue.h"
+
 
 #define PATH_MAX_LEN 256
 
@@ -192,66 +199,107 @@ void check_sd_ready(void) {
     }
 }
 
-// ------------------------------ Main -------------------------------------
-void core1() {
-    printf("Initiating\n");
-    stdio_init_all();
-    sleep_ms(1500);
-    printf("SD Card Test (FatFs, C++17)\n");
-    sleep_ms(1500); 
+typedef struct {
+    int16_t ax, ay, az;
+    int16_t gx, gy, gz;
+    uint32_t t_us;
+} Sample;
 
+static queue_t sample_q;
 
-    // 1) Init + mount
-    if (!sd_init_and_mount()) {
-        loop_forever_msg("SD init/mount failed.");
+static void core1_reader(void)
+{
+    IMU_EN_SENSOR_TYPE type;
+    imuInit(&type);
+    uint32_t t_prev = (uint32_t)time_us_64();
+    while (1) {
+        IMU_ST_SENSOR_DATA stGyroRawData, stAccelRawData;
+        imuDataAccGyrGet(&stGyroRawData, &stAccelRawData);
+        uint32_t t_now = (uint32_t)time_us_64();
+        Sample s = { stAccelRawData.s16X, stAccelRawData.s16Y, stAccelRawData.s16Z,
+                      stGyroRawData.s16X, stGyroRawData.s16Y, stGyroRawData.s16Z,
+                      t_now };
+        queue_add_blocking(&sample_q, &s);
     }
-    printf("Mounted and back in main loop\n");
+}
 
-    printf("Checking if SD card is ready\n");
-    check_sd_ready();
-
-    // Build absolute file path: <drive>/test.txt
+void test_sd_write(void) {
     char path[PATH_MAX_LEN];
-    join_path(path, sizeof path, g_drive, "test1.txt");
-    printf("File path: %s\n", path);
-
-    // 2) Create the file
-    printf("Creating file\n");
+    join_path(path, sizeof path, g_drive, "sd_test.txt");
     FIL f;
     FRESULT fr = create_file(path, &f);
-    printf("result: %d\n", fr);
-    if (fr != FR_OK) die(fr, "f_open(create)");
-
-    // 3) Write data
-    printf("Writing data to \n");
-    const char *msg = "data writing test!\n";
+    if (fr != FR_OK) {
+        printf("Failed to create test file: %d\n", fr);
+        return;
+    }
+    const char *msg = "SD card test successful!\n";
     UINT bw = 0;
-    fr = write_to_file(&f, msg, (UINT)strlen(msg), &bw);
-    if (fr != FR_OK || bw != strlen(msg)) die(fr, "f_write/f_sync");
-    printf("Wrote %u bytes to %s\n", bw, path);
-
-    // Close the file
-    printf("Closing file\n");
+    fr = write_to_file(&f, msg, strlen(msg), &bw);
+    if (fr == FR_OK && bw == strlen(msg)) {
+        printf("Test file written: %s\n", path);
+    } else {
+        printf("Failed to write test file: %d\n", fr);
+    }
     f_close(&f);
+}
 
-    // 4) Check and list files (recursively) on the card
-    printf("Checking and listing files on the SD card:\n");
-    fr = check_and_list_files(g_drive);
-    if (fr != FR_OK) die(fr, "check_and_list_files");
+void core1(void) {
+    sleep_ms(1500); // optional
 
-    // Optional: unmount
-    printf("Unmounting drive\n");
-    fr = f_unmount(g_drive);
-    printf("f_unmount -> %s (%d)\n", FRESULT_str(fr), fr);
+    if (!sd_init_and_mount()) {
+        loop_forever_msg("SD init failed");
+    }
 
-    while (1) { tight_loop_contents(); }
+    char path[PATH_MAX_LEN];
+    join_path(path, sizeof path, g_drive, "imu_log.csv");
+
+    FIL file;
+    FRESULT fr = create_file(path, &file);
+    if (fr != FR_OK) die(fr, "f_open");
+
+    UINT written = 0;
+    const char *header = "timestamp_us,ax,ay,az,gx,gy,gz\n";
+    write_to_file(&file, header, strlen(header), &written);
+
+    IMU_EN_SENSOR_TYPE imu_type;
+    imuInit(&imu_type);
+    if (imu_type != IMU_EN_SENSOR_TYPE_ICM20948) {
+        printf("IMU not detected\n");
+        f_close(&file);
+        loop_forever_msg("No IMU");
+    }
+
+    while (true) {
+        IMU_ST_SENSOR_DATA gyro, accel;
+        imuDataAccGyrGet(&gyro, &accel);
+
+        uint32_t t_now = (uint32_t)time_us_64();
+        char line[96];
+        int len = snprintf(line, sizeof line,
+                           "%u,%d,%d,%d,%d,%d,%d\n",
+                           t_now,
+                           accel.s16X, accel.s16Y, accel.s16Z,
+                           gyro.s16X, gyro.s16Y, gyro.s16Z);
+
+        if (len > 0 && len < (int)sizeof line) {
+            fr = write_to_file(&file, line, (UINT)len, &written);
+            if (fr != FR_OK || written != (UINT)len) {
+                printf("IMU log write failed: %d\n", fr);
+                break;
+            }
+        }
+        sleep_ms(10); // adjust sampling rate as required
+    }
+
+    f_close(&file);
+    f_unmount(g_drive);
+    loop_forever_msg("Logging halted");
 }
 
 int main(void) {
-
-    stdio_init_all();
-    sleep_ms(3000);
-
+    stdio_init_all();         // only here
+    sleep_ms(2000);           // optional USB settle time
+    printf("IMU Logger starting...\n");
     multicore_launch_core1(core1);
-    while (1) { sleep_ms(1000); }
+    while (true) { sleep_ms(1000); }
 }
