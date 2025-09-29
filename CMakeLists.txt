@@ -26,6 +26,8 @@ project(${PROGRAM_NAME} C CXX ASM)
 pico_sdk_init()
 
 add_subdirectory(sd_card_driver build)
+add_subdirectory(icm20948)
+include_directories(./icm20948)
 
 # Add executable. Default name is the project name, version 0.1
 add_executable(${PROGRAM_NAME} 
@@ -67,6 +69,7 @@ pico_enable_stdio_uart(${PROGRAM_NAME} 0)
 
 target_include_directories(${PROGRAM_NAME} PUBLIC 
         include/ 
+        icm20948/
 )
 target_link_libraries(${PROGRAM_NAME}
     pico_stdlib
@@ -78,6 +81,8 @@ target_link_libraries(${PROGRAM_NAME}
     hardware_clocks
     hardware_adc
     hardware_pio
+
+    icm20948
 )
 
 pico_add_extra_outputs(${PROGRAM_NAME})
