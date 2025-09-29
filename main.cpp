@@ -1,12 +1,15 @@
 #include <stdio.h>
 #include <string.h>
 #include "pico/stdlib.h"
+#include "pico/multicore.h"
+
 #include "ff.h"
 #include "sd_card.h"
 #include "f_util.h"
 #include "hw_config.h"
 
 #define PATH_MAX_LEN 256
+
 
 // --------- Globals (FatFs requires the FS to outlive the mount) ----------
 static FATFS fs;                 // must be static/global (lives as long as the mount)
@@ -35,6 +38,7 @@ static void join_path(char *out, size_t out_sz, const char *drive, const char *r
 
 // ------------------------- 1) Initialization -----------------------------
 static bool sd_init_and_mount(void) {
+    printf("Initializing SD card\n");
     if (!sd_init_driver()) {
         printf("sd_init_driver() failed\n");
         return false;
@@ -77,7 +81,10 @@ static bool sd_init_and_mount(void) {
 // ------------------------- 2) File creation ------------------------------
 static FRESULT create_file(const char *abs_path, FIL *out_file) {
     // Creates/truncates a file and opens it for writing
+    printf("In create file func\n");
     return f_open(out_file, abs_path, FA_WRITE | FA_CREATE_ALWAYS);
+
+    //return f_open(out_file, abs_path, FA_WRITE | FA_OPEN_ALWAYS);
 }
 
 // ------------------------- 3) File writing -------------------------------
@@ -166,26 +173,57 @@ static FRESULT check_and_list_files(const char *root_drive) {
     return FR_OK;
 }
 
+
+// Debug 
+
+void check_sd_ready(void) {
+    FATFS *fs_ptr;
+    DWORD free_clusters;
+    FRESULT fr;
+
+    fr = f_getfree("0:", &free_clusters, &fs_ptr);
+    if (fr == FR_OK) {
+        DWORD total_sectors = (fs_ptr->n_fatent - 2) * fs_ptr->csize;
+        DWORD free_sectors  = free_clusters * fs_ptr->csize;
+
+        printf("SD card ready!\n");
+    } else {
+        printf("f_getfree failed: %d\n", fr);
+    }
+}
+
 // ------------------------------ Main -------------------------------------
-int main(void) {
+void core1() {
+    printf("Initiating\n");
     stdio_init_all();
     sleep_ms(1500);
+    printf("SD Card Test (FatFs, C++17)\n");
+    sleep_ms(1500); 
+
 
     // 1) Init + mount
     if (!sd_init_and_mount()) {
         loop_forever_msg("SD init/mount failed.");
     }
+    printf("Mounted and back in main loop\n");
+
+    printf("Checking if SD card is ready\n");
+    check_sd_ready();
 
     // Build absolute file path: <drive>/test.txt
     char path[PATH_MAX_LEN];
     join_path(path, sizeof path, g_drive, "test1.txt");
+    printf("File path: %s\n", path);
 
     // 2) Create the file
+    printf("Creating file\n");
     FIL f;
     FRESULT fr = create_file(path, &f);
+    printf("result: %d\n", fr);
     if (fr != FR_OK) die(fr, "f_open(create)");
 
     // 3) Write data
+    printf("Writing data to \n");
     const char *msg = "data writing test!\n";
     UINT bw = 0;
     fr = write_to_file(&f, msg, (UINT)strlen(msg), &bw);
@@ -193,15 +231,27 @@ int main(void) {
     printf("Wrote %u bytes to %s\n", bw, path);
 
     // Close the file
+    printf("Closing file\n");
     f_close(&f);
 
     // 4) Check and list files (recursively) on the card
+    printf("Checking and listing files on the SD card:\n");
     fr = check_and_list_files(g_drive);
     if (fr != FR_OK) die(fr, "check_and_list_files");
 
     // Optional: unmount
+    printf("Unmounting drive\n");
     fr = f_unmount(g_drive);
     printf("f_unmount -> %s (%d)\n", FRESULT_str(fr), fr);
 
+    while (1) { tight_loop_contents(); }
+}
+
+int main(void) {
+
+    stdio_init_all();
+    sleep_ms(3000);
+
+    multicore_launch_core1(core1);
     while (1) { sleep_ms(1000); }
 }
