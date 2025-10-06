@@ -12,6 +12,7 @@
 
 // FFT API (in data_preprocessing)
 #include "fft.h"
+#include "quantization.h"
 
 // For IMU Logging 
 # include "icm20948.h"
@@ -312,6 +313,20 @@ void core1_writer(void) {
         buf_pos++;
 
         if (buf_pos >= N_FFT) {
+            // ---- Quantize & dequantize ----
+            int16_t q15_ax[N_FFT], q15_ay[N_FFT], q15_az[N_FFT];
+            int clips_ax = 0, clips_ay = 0, clips_az = 0;
+
+            quantize_q15(buf_ax, N_FFT, q15_ax, &clips_ax);
+            quantize_q15(buf_ay, N_FFT, q15_ay, &clips_ay);
+            quantize_q15(buf_az, N_FFT, q15_az, &clips_az);
+
+            dequantize_q15(q15_ax, N_FFT, buf_ax);
+            dequantize_q15(q15_ay, N_FFT, buf_ay);
+            dequantize_q15(q15_az, N_FFT, buf_az);
+
+            printf("Quantization clips: ax=%d, ay=%d, az=%d\n", clips_ax, clips_ay, clips_az);
+
             // process each axis sequentially
             c32 X[N_FFT];
             float mag[N_FFT];

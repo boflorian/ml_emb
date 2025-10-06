@@ -1,3 +1,5 @@
+set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+
 # == DO NOT EDIT THE FOLLOWING LINES for the Raspberry Pi Pico VS Code Extension to work ==
 if(WIN32)
     set(USERHOME $ENV{USERPROFILE})
@@ -29,15 +31,12 @@ add_subdirectory(sd_card_driver build)
 add_subdirectory(icm20948)
 include_directories(./icm20948)
 
+add_subdirectory(../data_preprocessing ${CMAKE_BINARY_DIR}/data_preprocessing)
+
 # Add executable. Default name is the project name, version 0.1
 add_executable(${PROGRAM_NAME} 
     config/hw_config.c
     main.cpp 
-)
-
-# Include the data_preprocessing FFT implementation as a library source
-target_sources(${PROGRAM_NAME} PRIVATE
-  ${CMAKE_CURRENT_LIST_DIR}/../data_preprocessing/fft.c
 )
 
 # https://datasheets.raspberrypi.com/pico/raspberry-pi-pico-c-sdk.pdf
@@ -75,7 +74,6 @@ pico_enable_stdio_uart(${PROGRAM_NAME} 0)
 target_include_directories(${PROGRAM_NAME} PUBLIC 
         include/ 
         icm20948/
-  ${CMAKE_CURRENT_LIST_DIR}/../data_preprocessing
 )
 target_link_libraries(${PROGRAM_NAME}
     pico_stdlib
@@ -87,7 +85,7 @@ target_link_libraries(${PROGRAM_NAME}
     hardware_clocks
     hardware_adc
     hardware_pio
-
+    data_preprocessing
     icm20948
 )
 
