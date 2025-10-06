@@ -35,6 +35,11 @@ add_executable(${PROGRAM_NAME}
     main.cpp 
 )
 
+# Include the data_preprocessing FFT implementation as a library source
+target_sources(${PROGRAM_NAME} PRIVATE
+  ${CMAKE_CURRENT_LIST_DIR}/../data_preprocessing/fft.c
+)
+
 # https://datasheets.raspberrypi.com/pico/raspberry-pi-pico-c-sdk.pdf
 target_compile_definitions(${PROGRAM_NAME} PRIVATE
   #PICO_STDIO_USB_CONNECT_WAIT_TIMEOUT_MS=5000
@@ -70,6 +75,7 @@ pico_enable_stdio_uart(${PROGRAM_NAME} 0)
 target_include_directories(${PROGRAM_NAME} PUBLIC 
         include/ 
         icm20948/
+  ${CMAKE_CURRENT_LIST_DIR}/../data_preprocessing
 )
 target_link_libraries(${PROGRAM_NAME}
     pico_stdlib
