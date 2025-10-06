@@ -250,11 +250,11 @@ void core1(void) {
         loop_forever_msg("SD init failed");
     }
 
-    char path[PATH_MAX_LEN];
-    join_path(path, sizeof path, g_drive, "imu_log.csv");
+    char log_path[PATH_MAX_LEN];
+    join_path(log_path, sizeof log_path, g_drive, "imu_log.csv");
 
     FIL file;
-    FRESULT fr = create_file(path, &file);
+    FRESULT fr = create_file(log_path, &file);
     if (fr != FR_OK) die(fr, "f_open");
 
     UINT written = 0;
@@ -300,6 +300,6 @@ int main(void) {
     stdio_init_all();         // only here
     sleep_ms(2000);           // optional USB settle time
     printf("IMU Logger starting...\n");
-    multicore_launch_core1(core1);
+    multicore_launch_core1(core1); // only core1 can write to sd card 
     while (true) { sleep_ms(1000); }
 }
