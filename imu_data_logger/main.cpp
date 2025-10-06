@@ -213,6 +213,8 @@ void check_sd_ready(void) {
 typedef struct {
     int16_t ax, ay, az;
     int16_t gx, gy, gz;
+    int16_t mx, my, mz;
+    float roll, pitch, yaw;
     uint32_t t_us;
 } Sample;
 
@@ -224,11 +226,14 @@ static void core0_sampler(void)
     imuInit(&type);
     uint32_t t_prev = (uint32_t)time_us_64();
     while (1) {
-        IMU_ST_SENSOR_DATA stGyroRawData, stAccelRawData;
-        imuDataAccGyrGet(&stGyroRawData, &stAccelRawData);
+        IMU_ST_SENSOR_DATA stGyroRawData, stAccelRawData, stMagnRawData;
+        IMU_ST_ANGLES_DATA stAngles;
+        imuDataGet(&stAngles, &stGyroRawData, &stAccelRawData, &stMagnRawData);
         uint32_t t_now = (uint32_t)time_us_64();
         Sample s = { stAccelRawData.s16X, stAccelRawData.s16Y, stAccelRawData.s16Z,
                       stGyroRawData.s16X, stGyroRawData.s16Y, stGyroRawData.s16Z,
+                      stMagnRawData.s16X, stMagnRawData.s16Y, stMagnRawData.s16Z,
+                      stAngles.fRoll, stAngles.fPitch, stAngles.fYaw,
                       t_now };
         queue_add_blocking(&sample_q, &s);
         // pace sampling to ~SAMPLE_RATE_HZ to match previous behavior
@@ -271,7 +276,7 @@ void core1_writer(void) {
     if (fr != FR_OK) die(fr, "f_open");
 
     UINT written = 0;
-    const char *header = "timestamp_us,ax,ay,az,gx,gy,gz\n";
+    const char *header = "timestamp_us,ax,ay,az,gx,gy,gz,mx,my,mz,roll,pitch,yaw\n";
     write_to_file(&file, header, strlen(header), &written);
 
     // Open a secondary file to store spectral peaks
@@ -286,19 +291,44 @@ void core1_writer(void) {
         printf("Warning: failed to create spectrum file: %d\n", fr2);
     }
 
-    // FFT accumulation buffers (per-axis)
-    float buf_ax[N_FFT];
-    float buf_ay[N_FFT];
-    float buf_az[N_FFT];
+    // FFT accumulation buffers (per-axis for all 9 channels)
+    float buf_ax[N_FFT], buf_ay[N_FFT], buf_az[N_FFT];
+    float buf_gx[N_FFT], buf_gy[N_FFT], buf_gz[N_FFT];
+    float buf_mx[N_FFT], buf_my[N_FFT], buf_mz[N_FFT];
     int buf_pos = 0;
 
-    // Sample counter and arrays for statistics
+    // Sample counter and arrays for statistics (both raw and quantized)
     uint32_t sample_count = 0;
+    // Accelerometer
+    float *all_raw_ax = (float*)malloc(MAX_SAMPLES * sizeof(float));
+    float *all_raw_ay = (float*)malloc(MAX_SAMPLES * sizeof(float));
+    float *all_raw_az = (float*)malloc(MAX_SAMPLES * sizeof(float));
     float *all_q_ax = (float*)malloc(MAX_SAMPLES * sizeof(float));
     float *all_q_ay = (float*)malloc(MAX_SAMPLES * sizeof(float));
     float *all_q_az = (float*)malloc(MAX_SAMPLES * sizeof(float));
+    // Gyroscope
+    float *all_raw_gx = (float*)malloc(MAX_SAMPLES * sizeof(float));
+    float *all_raw_gy = (float*)malloc(MAX_SAMPLES * sizeof(float));
+    float *all_raw_gz = (float*)malloc(MAX_SAMPLES * sizeof(float));
+    float *all_q_gx = (float*)malloc(MAX_SAMPLES * sizeof(float));
+    float *all_q_gy = (float*)malloc(MAX_SAMPLES * sizeof(float));
+    float *all_q_gz = (float*)malloc(MAX_SAMPLES * sizeof(float));
+    // Magnetometer
+    float *all_raw_mx = (float*)malloc(MAX_SAMPLES * sizeof(float));
+    float *all_raw_my = (float*)malloc(MAX_SAMPLES * sizeof(float));
+    float *all_raw_mz = (float*)malloc(MAX_SAMPLES * sizeof(float));
+    float *all_q_mx = (float*)malloc(MAX_SAMPLES * sizeof(float));
+    float *all_q_my = (float*)malloc(MAX_SAMPLES * sizeof(float));
+    float *all_q_mz = (float*)malloc(MAX_SAMPLES * sizeof(float));
+    // Angles
+    float *all_roll = (float*)malloc(MAX_SAMPLES * sizeof(float));
+    float *all_pitch = (float*)malloc(MAX_SAMPLES * sizeof(float));
+    float *all_yaw = (float*)malloc(MAX_SAMPLES * sizeof(float));
     
-    if (!all_q_ax || !all_q_ay || !all_q_az) {
+    if (!all_raw_ax || !all_raw_ay || !all_raw_az || !all_q_ax || !all_q_ay || !all_q_az ||
+        !all_raw_gx || !all_raw_gy || !all_raw_gz || !all_q_gx || !all_q_gy || !all_q_gz ||
+        !all_raw_mx || !all_raw_my || !all_raw_mz || !all_q_mx || !all_q_my || !all_q_mz ||
+        !all_roll || !all_pitch || !all_yaw) {
         printf("Failed to allocate memory for statistics\n");
         f_close(&file);
         if (fr2 == FR_OK) f_close(&spec_file);
@@ -311,9 +341,10 @@ void core1_writer(void) {
         queue_remove_blocking(&sample_q, &s);
 
         // write raw CSV line
-        char line[128];
-        int len = snprintf(line, sizeof line, "%u,%d,%d,%d,%d,%d,%d\n",
-                           s.t_us, s.ax, s.ay, s.az, s.gx, s.gy, s.gz);
+        char line[256];
+        int len = snprintf(line, sizeof line, "%u,%d,%d,%d,%d,%d,%d,%d,%d,%d,%.3f,%.3f,%.3f\n",
+                           s.t_us, s.ax, s.ay, s.az, s.gx, s.gy, s.gz, 
+                           s.mx, s.my, s.mz, s.roll, s.pitch, s.yaw);
         if (len > 0 && len < (int)sizeof line) {
             fr = write_to_file(&file, line, (UINT)len, &written);
             if (fr != FR_OK || written != (UINT)len) {
@@ -322,47 +353,94 @@ void core1_writer(void) {
             }
         }
 
-        // Quantize and store individual sample for statistics
-        float raw_vals[3] = {(float)s.ax, (float)s.ay, (float)s.az};
-        int16_t q15_vals[3];
+        // Store raw values for statistics
+        all_raw_ax[sample_count] = (float)s.ax;
+        all_raw_ay[sample_count] = (float)s.ay;
+        all_raw_az[sample_count] = (float)s.az;
+        all_raw_gx[sample_count] = (float)s.gx;
+        all_raw_gy[sample_count] = (float)s.gy;
+        all_raw_gz[sample_count] = (float)s.gz;
+        all_raw_mx[sample_count] = (float)s.mx;
+        all_raw_my[sample_count] = (float)s.my;
+        all_raw_mz[sample_count] = (float)s.mz;
+        all_roll[sample_count] = s.roll;
+        all_pitch[sample_count] = s.pitch;
+        all_yaw[sample_count] = s.yaw;
+        
+        // Quantize and store for statistics - accelerometer
+        float raw_vals[9] = {(float)s.ax, (float)s.ay, (float)s.az,
+                             (float)s.gx, (float)s.gy, (float)s.gz,
+                             (float)s.mx, (float)s.my, (float)s.mz};
+        int16_t q15_vals[9];
         int clip_count = 0;
         
-        quantize_q15(raw_vals, 3, q15_vals, &clip_count);
-        dequantize_q15(q15_vals, 3, raw_vals);
+        quantize_q15(raw_vals, 9, q15_vals, &clip_count);
+        dequantize_q15(q15_vals, 9, raw_vals);
         
         // Store quantized values for statistics
         all_q_ax[sample_count] = raw_vals[0];
         all_q_ay[sample_count] = raw_vals[1];
         all_q_az[sample_count] = raw_vals[2];
+        all_q_gx[sample_count] = raw_vals[3];
+        all_q_gy[sample_count] = raw_vals[4];
+        all_q_gz[sample_count] = raw_vals[5];
+        all_q_mx[sample_count] = raw_vals[6];
+        all_q_my[sample_count] = raw_vals[7];
+        all_q_mz[sample_count] = raw_vals[8];
 
         // accumulate for FFT (use raw sensor values, not quantized)
         buf_ax[buf_pos] = (float)s.ax;
         buf_ay[buf_pos] = (float)s.ay;
         buf_az[buf_pos] = (float)s.az;
+        buf_gx[buf_pos] = (float)s.gx;
+        buf_gy[buf_pos] = (float)s.gy;
+        buf_gz[buf_pos] = (float)s.gz;
+        buf_mx[buf_pos] = (float)s.mx;
+        buf_my[buf_pos] = (float)s.my;
+        buf_mz[buf_pos] = (float)s.mz;
         buf_pos++;
 
         if (buf_pos >= N_FFT) {
             // ---- Quantize & dequantize for FFT ----
             int16_t q15_ax[N_FFT], q15_ay[N_FFT], q15_az[N_FFT];
+            int16_t q15_gx[N_FFT], q15_gy[N_FFT], q15_gz[N_FFT];
+            int16_t q15_mx[N_FFT], q15_my[N_FFT], q15_mz[N_FFT];
             int clips_ax = 0, clips_ay = 0, clips_az = 0;
+            int clips_gx = 0, clips_gy = 0, clips_gz = 0;
+            int clips_mx = 0, clips_my = 0, clips_mz = 0;
 
             quantize_q15(buf_ax, N_FFT, q15_ax, &clips_ax);
             quantize_q15(buf_ay, N_FFT, q15_ay, &clips_ay);
             quantize_q15(buf_az, N_FFT, q15_az, &clips_az);
+            quantize_q15(buf_gx, N_FFT, q15_gx, &clips_gx);
+            quantize_q15(buf_gy, N_FFT, q15_gy, &clips_gy);
+            quantize_q15(buf_gz, N_FFT, q15_gz, &clips_gz);
+            quantize_q15(buf_mx, N_FFT, q15_mx, &clips_mx);
+            quantize_q15(buf_my, N_FFT, q15_my, &clips_my);
+            quantize_q15(buf_mz, N_FFT, q15_mz, &clips_mz);
 
             dequantize_q15(q15_ax, N_FFT, buf_ax);
             dequantize_q15(q15_ay, N_FFT, buf_ay);
             dequantize_q15(q15_az, N_FFT, buf_az);
+            dequantize_q15(q15_gx, N_FFT, buf_gx);
+            dequantize_q15(q15_gy, N_FFT, buf_gy);
+            dequantize_q15(q15_gz, N_FFT, buf_gz);
+            dequantize_q15(q15_mx, N_FFT, buf_mx);
+            dequantize_q15(q15_my, N_FFT, buf_my);
+            dequantize_q15(q15_mz, N_FFT, buf_mz);
 
-            printf("Quantization clips: ax=%d, ay=%d, az=%d\n", clips_ax, clips_ay, clips_az);
+            printf("Quantization clips: ax=%d, ay=%d, az=%d, gx=%d, gy=%d, gz=%d, mx=%d, my=%d, mz=%d\n", 
+                   clips_ax, clips_ay, clips_az, clips_gx, clips_gy, clips_gz, clips_mx, clips_my, clips_mz);
 
-            // process each axis sequentially
+            // process each axis sequentially (all 9 channels)
             c32 X[N_FFT];
             float mag[N_FFT];
             int idx[FFT_PEAKS]; float val[FFT_PEAKS]; int found = 0;
 
-            for (int axis = 0; axis < 3; axis++) {
-                float *buf = (axis == 0) ? buf_ax : (axis == 1) ? buf_ay : buf_az;
+            for (int axis = 0; axis < 9; axis++) {
+                float *buf = (axis == 0) ? buf_ax : (axis == 1) ? buf_ay : (axis == 2) ? buf_az :
+                             (axis == 3) ? buf_gx : (axis == 4) ? buf_gy : (axis == 5) ? buf_gz :
+                             (axis == 6) ? buf_mx : (axis == 7) ? buf_my : buf_mz;
 
                 // copy and window
                 float tmp[N_FFT];
@@ -381,7 +459,9 @@ void core1_writer(void) {
                         // write peaks to spec file
                         for (int p = 0; p < found; p++) {
                             float freq = ((float)idx[p]) * (SAMPLE_RATE_HZ / (float)N_FFT);
-                            const char *axname = (axis == 0) ? "ax" : (axis == 1) ? "ay" : "az";
+                            const char *axname = (axis == 0) ? "ax" : (axis == 1) ? "ay" : (axis == 2) ? "az" :
+                                                 (axis == 3) ? "gx" : (axis == 4) ? "gy" : (axis == 5) ? "gz" :
+                                                 (axis == 6) ? "mx" : (axis == 7) ? "my" : "mz";
                             char spec_line[128];
                             int l2 = snprintf(spec_line, sizeof spec_line, "%u,%s,%d,%.3f,%.6f\n",
                                               s.t_us, axname, idx[p], freq, val[p]);
@@ -401,55 +481,189 @@ void core1_writer(void) {
     
     printf("\nReached sample limit (%u samples). Computing statistics...\n", sample_count);
     
-    // Calculate statistics from quantized values
-    float mean_ax = mean_f32(all_q_ax, sample_count);
-    float mean_ay = mean_f32(all_q_ay, sample_count);
-    float mean_az = mean_f32(all_q_az, sample_count);
+    // Calculate statistics from RAW values
+    float raw_mean_ax = mean_f32(all_raw_ax, sample_count);
+    float raw_mean_ay = mean_f32(all_raw_ay, sample_count);
+    float raw_mean_az = mean_f32(all_raw_az, sample_count);
     
-    float var_ax = variance_f32(all_q_ax, sample_count, mean_ax);
-    float var_ay = variance_f32(all_q_ay, sample_count, mean_ay);
-    float var_az = variance_f32(all_q_az, sample_count, mean_az);
+    float raw_var_ax = variance_f32(all_raw_ax, sample_count, raw_mean_ax);
+    float raw_var_ay = variance_f32(all_raw_ay, sample_count, raw_mean_ay);
+    float raw_var_az = variance_f32(all_raw_az, sample_count, raw_mean_az);
     
-    float std_ax = stddev_f32(var_ax);
-    float std_ay = stddev_f32(var_ay);
-    float std_az = stddev_f32(var_az);
+    float raw_std_ax = stddev_f32(raw_var_ax);
+    float raw_std_ay = stddev_f32(raw_var_ay);
+    float raw_std_az = stddev_f32(raw_var_az);
     
-    float min_ax, max_ax, min_ay, max_ay, min_az, max_az;
-    min_max_f32(all_q_ax, sample_count, &min_ax, &max_ax);
-    min_max_f32(all_q_ay, sample_count, &min_ay, &max_ay);
-    min_max_f32(all_q_az, sample_count, &min_az, &max_az);
+    float raw_min_ax, raw_max_ax, raw_min_ay, raw_max_ay, raw_min_az, raw_max_az;
+    min_max_f32(all_raw_ax, sample_count, &raw_min_ax, &raw_max_ax);
+    min_max_f32(all_raw_ay, sample_count, &raw_min_ay, &raw_max_ay);
+    min_max_f32(all_raw_az, sample_count, &raw_min_az, &raw_max_az);
     
-    float med_ax = median_f32(all_q_ax, sample_count);
-    float med_ay = median_f32(all_q_ay, sample_count);
-    float med_az = median_f32(all_q_az, sample_count);
+    float raw_med_ax = median_f32(all_raw_ax, sample_count);
+    float raw_med_ay = median_f32(all_raw_ay, sample_count);
+    float raw_med_az = median_f32(all_raw_az, sample_count);
+    
+    // Gyroscope raw statistics
+    float raw_mean_gx = mean_f32(all_raw_gx, sample_count);
+    float raw_mean_gy = mean_f32(all_raw_gy, sample_count);
+    float raw_mean_gz = mean_f32(all_raw_gz, sample_count);
+    float raw_std_gx = stddev_f32(variance_f32(all_raw_gx, sample_count, raw_mean_gx));
+    float raw_std_gy = stddev_f32(variance_f32(all_raw_gy, sample_count, raw_mean_gy));
+    float raw_std_gz = stddev_f32(variance_f32(all_raw_gz, sample_count, raw_mean_gz));
+    float raw_min_gx, raw_max_gx, raw_min_gy, raw_max_gy, raw_min_gz, raw_max_gz;
+    min_max_f32(all_raw_gx, sample_count, &raw_min_gx, &raw_max_gx);
+    min_max_f32(all_raw_gy, sample_count, &raw_min_gy, &raw_max_gy);
+    min_max_f32(all_raw_gz, sample_count, &raw_min_gz, &raw_max_gz);
+    
+    // Magnetometer raw statistics
+    float raw_mean_mx = mean_f32(all_raw_mx, sample_count);
+    float raw_mean_my = mean_f32(all_raw_my, sample_count);
+    float raw_mean_mz = mean_f32(all_raw_mz, sample_count);
+    float raw_std_mx = stddev_f32(variance_f32(all_raw_mx, sample_count, raw_mean_mx));
+    float raw_std_my = stddev_f32(variance_f32(all_raw_my, sample_count, raw_mean_my));
+    float raw_std_mz = stddev_f32(variance_f32(all_raw_mz, sample_count, raw_mean_mz));
+    float raw_min_mx, raw_max_mx, raw_min_my, raw_max_my, raw_min_mz, raw_max_mz;
+    min_max_f32(all_raw_mx, sample_count, &raw_min_mx, &raw_max_mx);
+    min_max_f32(all_raw_my, sample_count, &raw_min_my, &raw_max_my);
+    min_max_f32(all_raw_mz, sample_count, &raw_min_mz, &raw_max_mz);
+    
+    // Angles statistics
+    float mean_roll = mean_f32(all_roll, sample_count);
+    float mean_pitch = mean_f32(all_pitch, sample_count);
+    float mean_yaw = mean_f32(all_yaw, sample_count);
+    float std_roll = stddev_f32(variance_f32(all_roll, sample_count, mean_roll));
+    float std_pitch = stddev_f32(variance_f32(all_pitch, sample_count, mean_pitch));
+    float std_yaw = stddev_f32(variance_f32(all_yaw, sample_count, mean_yaw));
+    float min_roll, max_roll, min_pitch, max_pitch, min_yaw, max_yaw;
+    min_max_f32(all_roll, sample_count, &min_roll, &max_roll);
+    min_max_f32(all_pitch, sample_count, &min_pitch, &max_pitch);
+    min_max_f32(all_yaw, sample_count, &min_yaw, &max_yaw);
+    
+    // Calculate statistics from QUANTIZED values
+    float q_mean_ax = mean_f32(all_q_ax, sample_count);
+    float q_mean_ay = mean_f32(all_q_ay, sample_count);
+    float q_mean_az = mean_f32(all_q_az, sample_count);
+    
+    float q_var_ax = variance_f32(all_q_ax, sample_count, q_mean_ax);
+    float q_var_ay = variance_f32(all_q_ay, sample_count, q_mean_ay);
+    float q_var_az = variance_f32(all_q_az, sample_count, q_mean_az);
+    
+    float q_std_ax = stddev_f32(q_var_ax);
+    float q_std_ay = stddev_f32(q_var_ay);
+    float q_std_az = stddev_f32(q_var_az);
+    
+    float q_min_ax, q_max_ax, q_min_ay, q_max_ay, q_min_az, q_max_az;
+    min_max_f32(all_q_ax, sample_count, &q_min_ax, &q_max_ax);
+    min_max_f32(all_q_ay, sample_count, &q_min_ay, &q_max_ay);
+    min_max_f32(all_q_az, sample_count, &q_min_az, &q_max_az);
+    
+    float q_med_ax = median_f32(all_q_ax, sample_count);
+    float q_med_ay = median_f32(all_q_ay, sample_count);
+    float q_med_az = median_f32(all_q_az, sample_count);
+    
+    // Gyroscope quantized statistics
+    float q_mean_gx = mean_f32(all_q_gx, sample_count);
+    float q_mean_gy = mean_f32(all_q_gy, sample_count);
+    float q_mean_gz = mean_f32(all_q_gz, sample_count);
+    float q_std_gx = stddev_f32(variance_f32(all_q_gx, sample_count, q_mean_gx));
+    float q_std_gy = stddev_f32(variance_f32(all_q_gy, sample_count, q_mean_gy));
+    float q_std_gz = stddev_f32(variance_f32(all_q_gz, sample_count, q_mean_gz));
+    float q_min_gx, q_max_gx, q_min_gy, q_max_gy, q_min_gz, q_max_gz;
+    min_max_f32(all_q_gx, sample_count, &q_min_gx, &q_max_gx);
+    min_max_f32(all_q_gy, sample_count, &q_min_gy, &q_max_gy);
+    min_max_f32(all_q_gz, sample_count, &q_min_gz, &q_max_gz);
+    
+    // Magnetometer quantized statistics
+    float q_mean_mx = mean_f32(all_q_mx, sample_count);
+    float q_mean_my = mean_f32(all_q_my, sample_count);
+    float q_mean_mz = mean_f32(all_q_mz, sample_count);
+    float q_std_mx = stddev_f32(variance_f32(all_q_mx, sample_count, q_mean_mx));
+    float q_std_my = stddev_f32(variance_f32(all_q_my, sample_count, q_mean_my));
+    float q_std_mz = stddev_f32(variance_f32(all_q_mz, sample_count, q_mean_mz));
+    float q_min_mx, q_max_mx, q_min_my, q_max_my, q_min_mz, q_max_mz;
+    min_max_f32(all_q_mx, sample_count, &q_min_mx, &q_max_mx);
+    min_max_f32(all_q_my, sample_count, &q_min_my, &q_max_my);
+    min_max_f32(all_q_mz, sample_count, &q_min_mz, &q_max_mz);
     
     // Print statistics to console
-    printf("\n=== IMU Data Statistics (from quantized values) ===\n");
+    printf("\n========================================\n");
+    printf("=== IMU Data Statistics ===\n");
+    printf("========================================\n");
     printf("Total samples: %u\n\n", sample_count);
     
+    printf("--- RAW Values (from sensor) ---\n\n");
     printf("Accelerometer X (ax):\n");
-    printf("  Mean:     %.6f\n", mean_ax);
-    printf("  Median:   %.6f\n", med_ax);
-    printf("  Variance: %.6f\n", var_ax);
-    printf("  Std Dev:  %.6f\n", std_ax);
-    printf("  Min:      %.6f\n", min_ax);
-    printf("  Max:      %.6f\n\n", max_ax);
+    printf("  Mean:     %.6f\n", raw_mean_ax);
+    printf("  Median:   %.6f\n", raw_med_ax);
+    printf("  Variance: %.6f\n", raw_var_ax);
+    printf("  Std Dev:  %.6f\n", raw_std_ax);
+    printf("  Min:      %.6f\n", raw_min_ax);
+    printf("  Max:      %.6f\n\n", raw_max_ax);
     
     printf("Accelerometer Y (ay):\n");
-    printf("  Mean:     %.6f\n", mean_ay);
-    printf("  Median:   %.6f\n", med_ay);
-    printf("  Variance: %.6f\n", var_ay);
-    printf("  Std Dev:  %.6f\n", std_ay);
-    printf("  Min:      %.6f\n", min_ay);
-    printf("  Max:      %.6f\n\n", max_ay);
+    printf("  Mean:     %.6f\n", raw_mean_ay);
+    printf("  Median:   %.6f\n", raw_med_ay);
+    printf("  Variance: %.6f\n", raw_var_ay);
+    printf("  Std Dev:  %.6f\n", raw_std_ay);
+    printf("  Min:      %.6f\n", raw_min_ay);
+    printf("  Max:      %.6f\n\n", raw_max_ay);
     
     printf("Accelerometer Z (az):\n");
-    printf("  Mean:     %.6f\n", mean_az);
-    printf("  Median:   %.6f\n", med_az);
-    printf("  Variance: %.6f\n", var_az);
-    printf("  Std Dev:  %.6f\n", std_az);
-    printf("  Min:      %.6f\n", min_az);
-    printf("  Max:      %.6f\n\n", max_az);
+    printf("  Mean:     %.6f\n", raw_mean_az);
+    printf("  Median:   %.6f\n", raw_med_az);
+    printf("  Variance: %.6f\n", raw_var_az);
+    printf("  Std Dev:  %.6f\n", raw_std_az);
+    printf("  Min:      %.6f\n", raw_min_az);
+    printf("  Max:      %.6f\n\n", raw_max_az);
+    
+    printf("--- QUANTIZED Values (Q15 format) ---\n\n");
+    printf("Accelerometer X (ax):\n");
+    printf("  Mean:     %.6f\n", q_mean_ax);
+    printf("  Median:   %.6f\n", q_med_ax);
+    printf("  Variance: %.6f\n", q_var_ax);
+    printf("  Std Dev:  %.6f\n", q_std_ax);
+    printf("  Min:      %.6f\n", q_min_ax);
+    printf("  Max:      %.6f\n\n", q_max_ax);
+    
+    printf("Accelerometer Y (ay):\n");
+    printf("  Mean:     %.6f\n", q_mean_ay);
+    printf("  Median:   %.6f\n", q_med_ay);
+    printf("  Variance: %.6f\n", q_var_ay);
+    printf("  Std Dev:  %.6f\n", q_std_ay);
+    printf("  Min:      %.6f\n", q_min_ay);
+    printf("  Max:      %.6f\n\n", q_max_ay);
+    
+    printf("Accelerometer Z (az):\n");
+    printf("  Mean:     %.6f\n", q_mean_az);
+    printf("  Median:   %.6f\n", q_med_az);
+    printf("  Variance: %.6f\n", q_var_az);
+    printf("  Std Dev:  %.6f\n", q_std_az);
+    printf("  Min:      %.6f\n", q_min_az);
+    printf("  Max:      %.6f\n\n", q_max_az);
+    
+    printf("Gyroscope X (gx):\n");
+    printf("  Mean:     %.6f  Std Dev: %.6f  Min: %.6f  Max: %.6f\n\n", 
+           q_mean_gx, q_std_gx, q_min_gx, q_max_gx);
+    
+    printf("Gyroscope Y (gy):\n");
+    printf("  Mean:     %.6f  Std Dev: %.6f  Min: %.6f  Max: %.6f\n\n", 
+           q_mean_gy, q_std_gy, q_min_gy, q_max_gy);
+    
+    printf("Gyroscope Z (gz):\n");
+    printf("  Mean:     %.6f  Std Dev: %.6f  Min: %.6f  Max: %.6f\n\n", 
+           q_mean_gz, q_std_gz, q_min_gz, q_max_gz);
+    
+    printf("Magnetometer X (mx):\n");
+    printf("  Mean:     %.6f  Std Dev: %.6f  Min: %.6f  Max: %.6f\n\n", 
+           q_mean_mx, q_std_mx, q_min_mx, q_max_mx);
+    
+    printf("Magnetometer Y (my):\n");
+    printf("  Mean:     %.6f  Std Dev: %.6f  Min: %.6f  Max: %.6f\n\n", 
+           q_mean_my, q_std_my, q_min_my, q_max_my);
+    
+    printf("Magnetometer Z (mz):\n");
+    printf("  Mean:     %.6f  Std Dev: %.6f  Min: %.6f  Max: %.6f\n\n", 
+           q_mean_mz, q_std_mz, q_min_mz, q_max_mz);
     
     // Write statistics to file
     char stats_path[PATH_MAX_LEN];
@@ -463,11 +677,18 @@ void core1_writer(void) {
         UINT bw;
         
         len = snprintf(stats_buf, sizeof stats_buf, 
-            "IMU Data Statistics (from quantized values)\n");
+            "========================================\n"
+            "IMU Data Statistics\n"
+            "========================================\n");
         write_to_file(&stats_file, stats_buf, len, &bw);
         
         len = snprintf(stats_buf, sizeof stats_buf, 
             "Total samples: %u\n\n", sample_count);
+        write_to_file(&stats_file, stats_buf, len, &bw);
+        
+        // Write RAW statistics
+        len = snprintf(stats_buf, sizeof stats_buf,
+            "--- RAW Values (from sensor) ---\n\n");
         write_to_file(&stats_file, stats_buf, len, &bw);
         
         len = snprintf(stats_buf, sizeof stats_buf,
@@ -478,7 +699,7 @@ void core1_writer(void) {
             "  Std Dev:  %.6f\n"
             "  Min:      %.6f\n"
             "  Max:      %.6f\n\n",
-            mean_ax, med_ax, var_ax, std_ax, min_ax, max_ax);
+            raw_mean_ax, raw_med_ax, raw_var_ax, raw_std_ax, raw_min_ax, raw_max_ax);
         write_to_file(&stats_file, stats_buf, len, &bw);
         
         len = snprintf(stats_buf, sizeof stats_buf,
@@ -489,7 +710,7 @@ void core1_writer(void) {
             "  Std Dev:  %.6f\n"
             "  Min:      %.6f\n"
             "  Max:      %.6f\n\n",
-            mean_ay, med_ay, var_ay, std_ay, min_ay, max_ay);
+            raw_mean_ay, raw_med_ay, raw_var_ay, raw_std_ay, raw_min_ay, raw_max_ay);
         write_to_file(&stats_file, stats_buf, len, &bw);
         
         len = snprintf(stats_buf, sizeof stats_buf,
@@ -499,8 +720,96 @@ void core1_writer(void) {
             "  Variance: %.6f\n"
             "  Std Dev:  %.6f\n"
             "  Min:      %.6f\n"
-            "  Max:      %.6f\n",
-            mean_az, med_az, var_az, std_az, min_az, max_az);
+            "  Max:      %.6f\n\n",
+            raw_mean_az, raw_med_az, raw_var_az, raw_std_az, raw_min_az, raw_max_az);
+        write_to_file(&stats_file, stats_buf, len, &bw);
+        
+        len = snprintf(stats_buf, sizeof stats_buf,
+            "Gyroscope (gx, gy, gz):\n"
+            "  gx: Mean=%.3f Std=%.3f Min=%.3f Max=%.3f\n"
+            "  gy: Mean=%.3f Std=%.3f Min=%.3f Max=%.3f\n"
+            "  gz: Mean=%.3f Std=%.3f Min=%.3f Max=%.3f\n\n",
+            raw_mean_gx, raw_std_gx, raw_min_gx, raw_max_gx,
+            raw_mean_gy, raw_std_gy, raw_min_gy, raw_max_gy,
+            raw_mean_gz, raw_std_gz, raw_min_gz, raw_max_gz);
+        write_to_file(&stats_file, stats_buf, len, &bw);
+        
+        len = snprintf(stats_buf, sizeof stats_buf,
+            "Magnetometer (mx, my, mz):\n"
+            "  mx: Mean=%.3f Std=%.3f Min=%.3f Max=%.3f\n"
+            "  my: Mean=%.3f Std=%.3f Min=%.3f Max=%.3f\n"
+            "  mz: Mean=%.3f Std=%.3f Min=%.3f Max=%.3f\n\n",
+            raw_mean_mx, raw_std_mx, raw_min_mx, raw_max_mx,
+            raw_mean_my, raw_std_my, raw_min_my, raw_max_my,
+            raw_mean_mz, raw_std_mz, raw_min_mz, raw_max_mz);
+        write_to_file(&stats_file, stats_buf, len, &bw);
+        
+        len = snprintf(stats_buf, sizeof stats_buf,
+            "Orientation Angles:\n"
+            "  Roll:  Mean=%.3f° Std=%.3f° Min=%.3f° Max=%.3f°\n"
+            "  Pitch: Mean=%.3f° Std=%.3f° Min=%.3f° Max=%.3f°\n"
+            "  Yaw:   Mean=%.3f° Std=%.3f° Min=%.3f° Max=%.3f°\n\n",
+            mean_roll, std_roll, min_roll, max_roll,
+            mean_pitch, std_pitch, min_pitch, max_pitch,
+            mean_yaw, std_yaw, min_yaw, max_yaw);
+        write_to_file(&stats_file, stats_buf, len, &bw);
+        
+        // Write QUANTIZED statistics
+        len = snprintf(stats_buf, sizeof stats_buf,
+            "--- QUANTIZED Values (Q15 format) ---\n\n");
+        write_to_file(&stats_file, stats_buf, len, &bw);
+        
+        len = snprintf(stats_buf, sizeof stats_buf,
+            "Accelerometer X (ax):\n"
+            "  Mean:     %.6f\n"
+            "  Median:   %.6f\n"
+            "  Variance: %.6f\n"
+            "  Std Dev:  %.6f\n"
+            "  Min:      %.6f\n"
+            "  Max:      %.6f\n\n",
+            q_mean_ax, q_med_ax, q_var_ax, q_std_ax, q_min_ax, q_max_ax);
+        write_to_file(&stats_file, stats_buf, len, &bw);
+        
+        len = snprintf(stats_buf, sizeof stats_buf,
+            "Accelerometer Y (ay):\n"
+            "  Mean:     %.6f\n"
+            "  Median:   %.6f\n"
+            "  Variance: %.6f\n"
+            "  Std Dev:  %.6f\n"
+            "  Min:      %.6f\n"
+            "  Max:      %.6f\n\n",
+            q_mean_ay, q_med_ay, q_var_ay, q_std_ay, q_min_ay, q_max_ay);
+        write_to_file(&stats_file, stats_buf, len, &bw);
+        
+        len = snprintf(stats_buf, sizeof stats_buf,
+            "Accelerometer Z (az):\n"
+            "  Mean:     %.6f\n"
+            "  Median:   %.6f\n"
+            "  Variance: %.6f\n"
+            "  Std Dev:  %.6f\n"
+            "  Min:      %.6f\n"
+            "  Max:      %.6f\n\n",
+            q_mean_az, q_med_az, q_var_az, q_std_az, q_min_az, q_max_az);
+        write_to_file(&stats_file, stats_buf, len, &bw);
+        
+        len = snprintf(stats_buf, sizeof stats_buf,
+            "Gyroscope (quantized):\n"
+            "  gx: Mean=%.6f Std=%.6f Min=%.6f Max=%.6f\n"
+            "  gy: Mean=%.6f Std=%.6f Min=%.6f Max=%.6f\n"
+            "  gz: Mean=%.6f Std=%.6f Min=%.6f Max=%.6f\n\n",
+            q_mean_gx, q_std_gx, q_min_gx, q_max_gx,
+            q_mean_gy, q_std_gy, q_min_gy, q_max_gy,
+            q_mean_gz, q_std_gz, q_min_gz, q_max_gz);
+        write_to_file(&stats_file, stats_buf, len, &bw);
+        
+        len = snprintf(stats_buf, sizeof stats_buf,
+            "Magnetometer (quantized):\n"
+            "  mx: Mean=%.6f Std=%.6f Min=%.6f Max=%.6f\n"
+            "  my: Mean=%.6f Std=%.6f Min=%.6f Max=%.6f\n"
+            "  mz: Mean=%.6f Std=%.6f Min=%.6f Max=%.6f\n",
+            q_mean_mx, q_std_mx, q_min_mx, q_max_mx,
+            q_mean_my, q_std_my, q_min_my, q_max_my,
+            q_mean_mz, q_std_mz, q_min_mz, q_max_mz);
         write_to_file(&stats_file, stats_buf, len, &bw);
         
         f_close(&stats_file);
@@ -510,9 +819,27 @@ void core1_writer(void) {
     }
     
     // Clean up
+    free(all_raw_ax);
+    free(all_raw_ay);
+    free(all_raw_az);
+    free(all_raw_gx);
+    free(all_raw_gy);
+    free(all_raw_gz);
+    free(all_raw_mx);
+    free(all_raw_my);
+    free(all_raw_mz);
     free(all_q_ax);
     free(all_q_ay);
     free(all_q_az);
+    free(all_q_gx);
+    free(all_q_gy);
+    free(all_q_gz);
+    free(all_q_mx);
+    free(all_q_my);
+    free(all_q_mz);
+    free(all_roll);
+    free(all_pitch);
+    free(all_yaw);
 
     f_close(&file);
     if (fr2 == FR_OK) f_close(&spec_file);
