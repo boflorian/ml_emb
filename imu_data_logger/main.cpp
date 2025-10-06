@@ -10,12 +10,19 @@
 #include "f_util.h"
 #include "hw_config.h"
 
+// FFT API (in data_preprocessing)
+#include "fft.h"
+
 // For IMU Logging 
 # include "icm20948.h"
 #include "pico/util/queue.h"
 
 
 #define PATH_MAX_LEN 256
+#define QUEUE_DEPTH 1024
+#define N_FFT 256
+#define FFT_PEAKS 3
+#define SAMPLE_RATE_HZ 100.0f // approximate (sleep_ms(10) in sampler)
 
 
 // --------- Globals (FatFs requires the FS to outlive the mount) ----------
@@ -207,7 +214,7 @@ typedef struct {
 
 static queue_t sample_q;
 
-static void core1_reader(void)
+static void core0_sampler(void)
 {
     IMU_EN_SENSOR_TYPE type;
     imuInit(&type);
@@ -220,6 +227,8 @@ static void core1_reader(void)
                       stGyroRawData.s16X, stGyroRawData.s16Y, stGyroRawData.s16Z,
                       t_now };
         queue_add_blocking(&sample_q, &s);
+        // pace sampling to ~SAMPLE_RATE_HZ to match previous behavior
+        sleep_ms(10);
     }
 }
 
@@ -243,44 +252,51 @@ void test_sd_write(void) {
     f_close(&f);
 }
 
-void core1(void) {
+void core1_writer(void) {
     sleep_ms(1500); // optional
 
     if (!sd_init_and_mount()) {
         loop_forever_msg("SD init failed");
     }
 
-    char log_path[PATH_MAX_LEN];
-    join_path(log_path, sizeof log_path, g_drive, "imu_log.csv");
+    char path[PATH_MAX_LEN];
+    join_path(path, sizeof path, g_drive, "imu_log.csv");
 
     FIL file;
-    FRESULT fr = create_file(log_path, &file);
+    FRESULT fr = create_file(path, &file);
     if (fr != FR_OK) die(fr, "f_open");
 
     UINT written = 0;
     const char *header = "timestamp_us,ax,ay,az,gx,gy,gz\n";
     write_to_file(&file, header, strlen(header), &written);
 
-    IMU_EN_SENSOR_TYPE imu_type;
-    imuInit(&imu_type);
-    if (imu_type != IMU_EN_SENSOR_TYPE_ICM20948) {
-        printf("IMU not detected\n");
-        f_close(&file);
-        loop_forever_msg("No IMU");
+    // Open a secondary file to store spectral peaks
+    char spectrum_path[PATH_MAX_LEN];
+    join_path(spectrum_path, sizeof spectrum_path, g_drive, "imu_spectra.csv");
+    FIL spec_file;
+    FRESULT fr2 = create_file(spectrum_path, &spec_file);
+    if (fr2 == FR_OK) {
+        const char *spec_hdr = "timestamp_us,axis,bin,freq_hz,amp\n";
+        UINT bw; write_to_file(&spec_file, spec_hdr, strlen(spec_hdr), &bw);
+    } else {
+        printf("Warning: failed to create spectrum file: %d\n", fr2);
     }
 
+    // FFT accumulation buffers (per-axis)
+    float buf_ax[N_FFT];
+    float buf_ay[N_FFT];
+    float buf_az[N_FFT];
+    int buf_pos = 0;
+
+    // Dequeue samples, write CSV, accumulate buffers and run FFT when full
     while (true) {
-        IMU_ST_SENSOR_DATA gyro, accel;
-        imuDataAccGyrGet(&gyro, &accel);
+        Sample s;
+        queue_remove_blocking(&sample_q, &s);
 
-        uint32_t t_now = (uint32_t)time_us_64();
-        char line[96];
-        int len = snprintf(line, sizeof line,
-                           "%u,%d,%d,%d,%d,%d,%d\n",
-                           t_now,
-                           accel.s16X, accel.s16Y, accel.s16Z,
-                           gyro.s16X, gyro.s16Y, gyro.s16Z);
-
+        // write raw CSV line
+        char line[128];
+        int len = snprintf(line, sizeof line, "%u,%d,%d,%d,%d,%d,%d\n",
+                           s.t_us, s.ax, s.ay, s.az, s.gx, s.gy, s.gz);
         if (len > 0 && len < (int)sizeof line) {
             fr = write_to_file(&file, line, (UINT)len, &written);
             if (fr != FR_OK || written != (UINT)len) {
@@ -288,7 +304,53 @@ void core1(void) {
                 break;
             }
         }
-        sleep_ms(10); // adjust sampling rate as required
+
+        // accumulate
+        buf_ax[buf_pos] = (float)s.ax;
+        buf_ay[buf_pos] = (float)s.ay;
+        buf_az[buf_pos] = (float)s.az;
+        buf_pos++;
+
+        if (buf_pos >= N_FFT) {
+            // process each axis sequentially
+            c32 X[N_FFT];
+            float mag[N_FFT];
+            int idx[FFT_PEAKS]; float val[FFT_PEAKS]; int found = 0;
+
+            for (int axis = 0; axis < 3; axis++) {
+                float *buf = (axis == 0) ? buf_ax : (axis == 1) ? buf_ay : buf_az;
+
+                // copy and window
+                float tmp[N_FFT];
+                for (int i = 0; i < N_FFT; i++) tmp[i] = buf[i];
+                hamming_window(tmp, N_FFT);
+                for (int i = 0; i < N_FFT; i++) { X[i].re = tmp[i]; X[i].im = 0.0f; }
+
+                if (fft_radix2(X, N_FFT, +1) == 0) {
+                    fft_mag(X, N_FFT, mag);
+                    const float scale = (2.0f / (float)N_FFT) / 0.54f;
+                    for (int k = 0; k <= N_FFT/2; k++) mag[k] *= scale;
+
+                    top_k_peaks(mag, N_FFT/2 + 1, 1, FFT_PEAKS, idx, val, &found);
+
+                    if (fr2 == FR_OK) {
+                        // write peaks to spec file
+                        for (int p = 0; p < found; p++) {
+                            float freq = ((float)idx[p]) * (SAMPLE_RATE_HZ / (float)N_FFT);
+                            const char *axname = (axis == 0) ? "ax" : (axis == 1) ? "ay" : "az";
+                            char spec_line[128];
+                            int l2 = snprintf(spec_line, sizeof spec_line, "%u,%s,%d,%.3f,%.6f\n",
+                                              s.t_us, axname, idx[p], freq, val[p]);
+                            if (l2 > 0 && l2 < (int)sizeof spec_line) {
+                                UINT bw; write_to_file(&spec_file, spec_line, (UINT)l2, &bw);
+                            }
+                        }
+                    }
+                }
+            }
+
+            buf_pos = 0;
+        }
     }
 
     f_close(&file);
@@ -300,6 +362,15 @@ int main(void) {
     stdio_init_all();         // only here
     sleep_ms(2000);           // optional USB settle time
     printf("IMU Logger starting...\n");
-    multicore_launch_core1(core1); // only core1 can write to sd card 
+    // initialize the shared queue before launching core1
+    queue_init(&sample_q, sizeof(Sample), QUEUE_DEPTH);
+
+    // start core1 (SD writer + FFT)
+    multicore_launch_core1(core1_writer); // core1 will own SD writes
+
+    // run the sampler on core0 (this will block and push samples to the queue)
+    core0_sampler();
+
+    // unreachable
     while (true) { sleep_ms(1000); }
 }
