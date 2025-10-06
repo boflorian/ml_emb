@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include "pico/stdlib.h"
 #include "pico/multicore.h"
 #include "pico/util/queue.h"
@@ -13,6 +14,7 @@
 // FFT API (in data_preprocessing)
 #include "fft.h"
 #include "quantization.h"
+#include "statistic.h"
 
 // For IMU Logging 
 # include "icm20948.h"
@@ -24,6 +26,7 @@
 #define N_FFT 256
 #define FFT_PEAKS 3
 #define SAMPLE_RATE_HZ 100.0f // approximate (sleep_ms(10) in sampler)
+#define MAX_SAMPLES 1000 // limit for data collection
 
 
 // --------- Globals (FatFs requires the FS to outlive the mount) ----------
@@ -289,8 +292,21 @@ void core1_writer(void) {
     float buf_az[N_FFT];
     int buf_pos = 0;
 
+    // Sample counter and arrays for statistics
+    uint32_t sample_count = 0;
+    float *all_q_ax = (float*)malloc(MAX_SAMPLES * sizeof(float));
+    float *all_q_ay = (float*)malloc(MAX_SAMPLES * sizeof(float));
+    float *all_q_az = (float*)malloc(MAX_SAMPLES * sizeof(float));
+    
+    if (!all_q_ax || !all_q_ay || !all_q_az) {
+        printf("Failed to allocate memory for statistics\n");
+        f_close(&file);
+        if (fr2 == FR_OK) f_close(&spec_file);
+        loop_forever_msg("Memory allocation failed");
+    }
+
     // Dequeue samples, write CSV, accumulate buffers and run FFT when full
-    while (true) {
+    while (sample_count < MAX_SAMPLES) {
         Sample s;
         queue_remove_blocking(&sample_q, &s);
 
@@ -324,6 +340,14 @@ void core1_writer(void) {
             dequantize_q15(q15_ax, N_FFT, buf_ax);
             dequantize_q15(q15_ay, N_FFT, buf_ay);
             dequantize_q15(q15_az, N_FFT, buf_az);
+            
+            // Store quantized values for statistics (if space available)
+            for (int i = 0; i < N_FFT && (sample_count - buf_pos + i) < MAX_SAMPLES; i++) {
+                uint32_t idx = sample_count - buf_pos + i;
+                all_q_ax[idx] = buf_ax[i];
+                all_q_ay[idx] = buf_ay[i];
+                all_q_az[idx] = buf_az[i];
+            }
 
             printf("Quantization clips: ax=%d, ay=%d, az=%d\n", clips_ax, clips_ay, clips_az);
 
@@ -366,11 +390,101 @@ void core1_writer(void) {
 
             buf_pos = 0;
         }
+        
+        sample_count++;
     }
+    
+    printf("\nReached sample limit (%u samples). Computing statistics...\n", sample_count);
+    
+    // Calculate statistics from quantized values
+    float mean_ax = mean_f32(all_q_ax, sample_count);
+    float mean_ay = mean_f32(all_q_ay, sample_count);
+    float mean_az = mean_f32(all_q_az, sample_count);
+    
+    float var_ax = variance_f32(all_q_ax, sample_count, mean_ax);
+    float var_ay = variance_f32(all_q_ay, sample_count, mean_ay);
+    float var_az = variance_f32(all_q_az, sample_count, mean_az);
+    
+    float std_ax = stddev_f32(var_ax);
+    float std_ay = stddev_f32(var_ay);
+    float std_az = stddev_f32(var_az);
+    
+    float min_ax, max_ax, min_ay, max_ay, min_az, max_az;
+    min_max_f32(all_q_ax, sample_count, &min_ax, &max_ax);
+    min_max_f32(all_q_ay, sample_count, &min_ay, &max_ay);
+    min_max_f32(all_q_az, sample_count, &min_az, &max_az);
+    
+    float med_ax = median_f32(all_q_ax, sample_count);
+    float med_ay = median_f32(all_q_ay, sample_count);
+    float med_az = median_f32(all_q_az, sample_count);
+    
+    // Write statistics to file
+    char stats_path[PATH_MAX_LEN];
+    join_path(stats_path, sizeof stats_path, g_drive, "imu_statistics.txt");
+    FIL stats_file;
+    FRESULT fr_stats = create_file(stats_path, &stats_file);
+    
+    if (fr_stats == FR_OK) {
+        char stats_buf[512];
+        int len;
+        UINT bw;
+        
+        len = snprintf(stats_buf, sizeof stats_buf, 
+            "IMU Data Statistics (from quantized values)\n");
+        write_to_file(&stats_file, stats_buf, len, &bw);
+        
+        len = snprintf(stats_buf, sizeof stats_buf, 
+            "Total samples: %u\n\n", sample_count);
+        write_to_file(&stats_file, stats_buf, len, &bw);
+        
+        len = snprintf(stats_buf, sizeof stats_buf,
+            "Accelerometer X (ax):\n"
+            "  Mean:     %.6f\n"
+            "  Median:   %.6f\n"
+            "  Variance: %.6f\n"
+            "  Std Dev:  %.6f\n"
+            "  Min:      %.6f\n"
+            "  Max:      %.6f\n\n",
+            mean_ax, med_ax, var_ax, std_ax, min_ax, max_ax);
+        write_to_file(&stats_file, stats_buf, len, &bw);
+        
+        len = snprintf(stats_buf, sizeof stats_buf,
+            "Accelerometer Y (ay):\n"
+            "  Mean:     %.6f\n"
+            "  Median:   %.6f\n"
+            "  Variance: %.6f\n"
+            "  Std Dev:  %.6f\n"
+            "  Min:      %.6f\n"
+            "  Max:      %.6f\n\n",
+            mean_ay, med_ay, var_ay, std_ay, min_ay, max_ay);
+        write_to_file(&stats_file, stats_buf, len, &bw);
+        
+        len = snprintf(stats_buf, sizeof stats_buf,
+            "Accelerometer Z (az):\n"
+            "  Mean:     %.6f\n"
+            "  Median:   %.6f\n"
+            "  Variance: %.6f\n"
+            "  Std Dev:  %.6f\n"
+            "  Min:      %.6f\n"
+            "  Max:      %.6f\n",
+            mean_az, med_az, var_az, std_az, min_az, max_az);
+        write_to_file(&stats_file, stats_buf, len, &bw);
+        
+        f_close(&stats_file);
+        printf("Statistics written to %s\n", stats_path);
+    } else {
+        printf("Failed to create statistics file: %d\n", fr_stats);
+    }
+    
+    // Clean up
+    free(all_q_ax);
+    free(all_q_ay);
+    free(all_q_az);
 
     f_close(&file);
+    if (fr2 == FR_OK) f_close(&spec_file);
     f_unmount(g_drive);
-    loop_forever_msg("Logging halted");
+    loop_forever_msg("Logging complete. Statistics saved.");
 }
 
 int main(void) {
