@@ -261,7 +261,7 @@ void core1_writer(void) {
 
     if (!sd_init_and_mount()) {
         loop_forever_msg("SD init failed");
-    }
+    }   
 
     char path[PATH_MAX_LEN];
     join_path(path, sizeof path, g_drive, "imu_log.csv");
@@ -322,14 +322,27 @@ void core1_writer(void) {
             }
         }
 
-        // accumulate
+        // Quantize and store individual sample for statistics
+        float raw_vals[3] = {(float)s.ax, (float)s.ay, (float)s.az};
+        int16_t q15_vals[3];
+        int clip_count = 0;
+        
+        quantize_q15(raw_vals, 3, q15_vals, &clip_count);
+        dequantize_q15(q15_vals, 3, raw_vals);
+        
+        // Store quantized values for statistics
+        all_q_ax[sample_count] = raw_vals[0];
+        all_q_ay[sample_count] = raw_vals[1];
+        all_q_az[sample_count] = raw_vals[2];
+
+        // accumulate for FFT (use raw sensor values, not quantized)
         buf_ax[buf_pos] = (float)s.ax;
         buf_ay[buf_pos] = (float)s.ay;
         buf_az[buf_pos] = (float)s.az;
         buf_pos++;
 
         if (buf_pos >= N_FFT) {
-            // ---- Quantize & dequantize ----
+            // ---- Quantize & dequantize for FFT ----
             int16_t q15_ax[N_FFT], q15_ay[N_FFT], q15_az[N_FFT];
             int clips_ax = 0, clips_ay = 0, clips_az = 0;
 
@@ -340,14 +353,6 @@ void core1_writer(void) {
             dequantize_q15(q15_ax, N_FFT, buf_ax);
             dequantize_q15(q15_ay, N_FFT, buf_ay);
             dequantize_q15(q15_az, N_FFT, buf_az);
-            
-            // Store quantized values for statistics (if space available)
-            for (int i = 0; i < N_FFT && (sample_count - buf_pos + i) < MAX_SAMPLES; i++) {
-                uint32_t idx = sample_count - buf_pos + i;
-                all_q_ax[idx] = buf_ax[i];
-                all_q_ay[idx] = buf_ay[i];
-                all_q_az[idx] = buf_az[i];
-            }
 
             printf("Quantization clips: ax=%d, ay=%d, az=%d\n", clips_ax, clips_ay, clips_az);
 
@@ -417,6 +422,34 @@ void core1_writer(void) {
     float med_ax = median_f32(all_q_ax, sample_count);
     float med_ay = median_f32(all_q_ay, sample_count);
     float med_az = median_f32(all_q_az, sample_count);
+    
+    // Print statistics to console
+    printf("\n=== IMU Data Statistics (from quantized values) ===\n");
+    printf("Total samples: %u\n\n", sample_count);
+    
+    printf("Accelerometer X (ax):\n");
+    printf("  Mean:     %.6f\n", mean_ax);
+    printf("  Median:   %.6f\n", med_ax);
+    printf("  Variance: %.6f\n", var_ax);
+    printf("  Std Dev:  %.6f\n", std_ax);
+    printf("  Min:      %.6f\n", min_ax);
+    printf("  Max:      %.6f\n\n", max_ax);
+    
+    printf("Accelerometer Y (ay):\n");
+    printf("  Mean:     %.6f\n", mean_ay);
+    printf("  Median:   %.6f\n", med_ay);
+    printf("  Variance: %.6f\n", var_ay);
+    printf("  Std Dev:  %.6f\n", std_ay);
+    printf("  Min:      %.6f\n", min_ay);
+    printf("  Max:      %.6f\n\n", max_ay);
+    
+    printf("Accelerometer Z (az):\n");
+    printf("  Mean:     %.6f\n", mean_az);
+    printf("  Median:   %.6f\n", med_az);
+    printf("  Variance: %.6f\n", var_az);
+    printf("  Std Dev:  %.6f\n", std_az);
+    printf("  Min:      %.6f\n", min_az);
+    printf("  Max:      %.6f\n\n", max_az);
     
     // Write statistics to file
     char stats_path[PATH_MAX_LEN];
