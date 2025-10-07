@@ -236,6 +236,13 @@ static void core0_sampler(void)
 {
     IMU_EN_SENSOR_TYPE type;
     imuInit(&type);
+    
+    sleep_ms(100); // short delay after init
+    // Allow IMU sensor to settle after initialization (2 seconds)cd
+    printf("Waiting for IMU to settle...\n");
+    sleep_ms(2000);
+    printf("IMU ready, starting data collection.\n");
+    
     uint32_t t_prev = (uint32_t)time_us_64();
     while (1) {
         IMU_ST_SENSOR_DATA stGyroRawData, stAccelRawData, stMagnRawData;
@@ -913,7 +920,7 @@ void core1_writer(void) {
 int main(void) {
     stdio_init_all();         // only here
     sleep_ms(2000);           // optional USB settle time
-    printf("IMU Logger starting...\n");
+    printf("Startup...\n");
     // initialize the shared queue before launching core1
     queue_init(&sample_q, sizeof(Sample), QUEUE_DEPTH);
 
