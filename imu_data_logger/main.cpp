@@ -276,7 +276,7 @@ void core1_writer(void) {
     if (fr != FR_OK) die(fr, "f_open");
 
     UINT written = 0;
-    const char *header = "timestamp_us,ax,ay,az,gx,gy,gz,mx,my,mz,roll,pitch,yaw\n";
+    const char *header = "timestamp_us,ax_raw,ay_raw,az_raw,gx_raw,gy_raw,gz_raw,mx_raw,my_raw,mz_raw,ax_f32,ay_f32,az_f32,gx_f32,gy_f32,gz_f32,mx_f32,my_f32,mz_f32,ax_q15,ay_q15,az_q15,gx_q15,gy_q15,gz_q15,mx_q15,my_q15,mz_q15,roll,pitch,yaw\n";
     write_to_file(&file, header, strlen(header), &written);
 
     // Open a secondary file to store spectral peaks
@@ -340,11 +340,41 @@ void core1_writer(void) {
         Sample s;
         queue_remove_blocking(&sample_q, &s);
 
-        // write raw CSV line
-        char line[256];
-        int len = snprintf(line, sizeof line, "%u,%d,%d,%d,%d,%d,%d,%d,%d,%d,%.3f,%.3f,%.3f\n",
-                           s.t_us, s.ax, s.ay, s.az, s.gx, s.gy, s.gz, 
-                           s.mx, s.my, s.mz, s.roll, s.pitch, s.yaw);
+        // Convert raw int16 to float32 (standard conversion)
+        float f32_ax = (float)s.ax;
+        float f32_ay = (float)s.ay;
+        float f32_az = (float)s.az;
+        float f32_gx = (float)s.gx;
+        float f32_gy = (float)s.gy;
+        float f32_gz = (float)s.gz;
+        float f32_mx = (float)s.mx;
+        float f32_my = (float)s.my;
+        float f32_mz = (float)s.mz;
+        
+        // Quantize to Q15 format
+        float raw_vals[9] = {f32_ax, f32_ay, f32_az,
+                             f32_gx, f32_gy, f32_gz,
+                             f32_mx, f32_my, f32_mz};
+        int16_t q15_vals[9];
+        int clip_count = 0;
+        
+        quantize_q15(raw_vals, 9, q15_vals, &clip_count);
+        
+        // Write CSV line with all three formats: raw int16, float32, quantized int16
+        char line[512];
+        int len = snprintf(line, sizeof line, 
+            "%u,"                                           // timestamp
+            "%d,%d,%d,%d,%d,%d,%d,%d,%d,"                  // raw int16 (9 values)
+            "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f," // float32 (9 values)
+            "%d,%d,%d,%d,%d,%d,%d,%d,%d,"                  // quantized int16 (9 values)
+            "%.3f,%.3f,%.3f\n",                            // angles (3 values)
+            s.t_us,
+            s.ax, s.ay, s.az, s.gx, s.gy, s.gz, s.mx, s.my, s.mz,
+            f32_ax, f32_ay, f32_az, f32_gx, f32_gy, f32_gz, f32_mx, f32_my, f32_mz,
+            q15_vals[0], q15_vals[1], q15_vals[2], q15_vals[3], q15_vals[4], 
+            q15_vals[5], q15_vals[6], q15_vals[7], q15_vals[8],
+            s.roll, s.pitch, s.yaw);
+        
         if (len > 0 && len < (int)sizeof line) {
             fr = write_to_file(&file, line, (UINT)len, &written);
             if (fr != FR_OK || written != (UINT)len) {
@@ -353,40 +383,34 @@ void core1_writer(void) {
             }
         }
 
-        // Store raw values for statistics
-        all_raw_ax[sample_count] = (float)s.ax;
-        all_raw_ay[sample_count] = (float)s.ay;
-        all_raw_az[sample_count] = (float)s.az;
-        all_raw_gx[sample_count] = (float)s.gx;
-        all_raw_gy[sample_count] = (float)s.gy;
-        all_raw_gz[sample_count] = (float)s.gz;
-        all_raw_mx[sample_count] = (float)s.mx;
-        all_raw_my[sample_count] = (float)s.my;
-        all_raw_mz[sample_count] = (float)s.mz;
+        // Store float32 values for statistics
+        all_raw_ax[sample_count] = f32_ax;
+        all_raw_ay[sample_count] = f32_ay;
+        all_raw_az[sample_count] = f32_az;
+        all_raw_gx[sample_count] = f32_gx;
+        all_raw_gy[sample_count] = f32_gy;
+        all_raw_gz[sample_count] = f32_gz;
+        all_raw_mx[sample_count] = f32_mx;
+        all_raw_my[sample_count] = f32_my;
+        all_raw_mz[sample_count] = f32_mz;
         all_roll[sample_count] = s.roll;
         all_pitch[sample_count] = s.pitch;
         all_yaw[sample_count] = s.yaw;
         
-        // Quantize and store for statistics - accelerometer
-        float raw_vals[9] = {(float)s.ax, (float)s.ay, (float)s.az,
-                             (float)s.gx, (float)s.gy, (float)s.gz,
-                             (float)s.mx, (float)s.my, (float)s.mz};
-        int16_t q15_vals[9];
-        int clip_count = 0;
+        // Dequantize Q15 back to float for statistics
+        float dequant_vals[9];
+        dequantize_q15(q15_vals, 9, dequant_vals);
         
-        quantize_q15(raw_vals, 9, q15_vals, &clip_count);
-        dequantize_q15(q15_vals, 9, raw_vals);
-        
-        // Store quantized values for statistics
-        all_q_ax[sample_count] = raw_vals[0];
-        all_q_ay[sample_count] = raw_vals[1];
-        all_q_az[sample_count] = raw_vals[2];
-        all_q_gx[sample_count] = raw_vals[3];
-        all_q_gy[sample_count] = raw_vals[4];
-        all_q_gz[sample_count] = raw_vals[5];
-        all_q_mx[sample_count] = raw_vals[6];
-        all_q_my[sample_count] = raw_vals[7];
-        all_q_mz[sample_count] = raw_vals[8];
+        // Store dequantized values for statistics
+        all_q_ax[sample_count] = dequant_vals[0];
+        all_q_ay[sample_count] = dequant_vals[1];
+        all_q_az[sample_count] = dequant_vals[2];
+        all_q_gx[sample_count] = dequant_vals[3];
+        all_q_gy[sample_count] = dequant_vals[4];
+        all_q_gz[sample_count] = dequant_vals[5];
+        all_q_mx[sample_count] = dequant_vals[6];
+        all_q_my[sample_count] = dequant_vals[7];
+        all_q_mz[sample_count] = dequant_vals[8];
 
         // accumulate for FFT (use raw sensor values, not quantized)
         buf_ax[buf_pos] = (float)s.ax;
