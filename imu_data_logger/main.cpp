@@ -28,18 +28,6 @@
 #define SAMPLE_RATE_HZ 100.0f // approximate (sleep_ms(10) in sampler)
 #define MAX_SAMPLES 1000 // limit for data collection
 
-// ICM-20948 sensor normalization constants
-// These convert raw int16 values to normalized [-1, 1) range for Q15 quantization
-// Accelerometer: ±2g range, 16384 LSB/g → normalize by dividing by max expected g (e.g., 2g)
-#define ACCEL_SCALE (1.0f / 16384.0f)  // Converts LSB to g, then divide by max range
-#define ACCEL_RANGE 2.0f                // ±2g, so full range is 4g peak-to-peak
-// Gyroscope: ±250 dps range, 131 LSB/dps → normalize by dividing by max expected dps
-#define GYRO_SCALE (1.0f / 131.0f)     // Converts LSB to dps
-#define GYRO_RANGE 250.0f               // ±250 dps, so full range is 500 dps peak-to-peak
-// Magnetometer: ±4900 µT range, 0.15 µT/LSB
-#define MAG_SCALE 0.15f                 // Converts LSB to µT
-#define MAG_RANGE 4900.0f               // ±4900 µT
-
 
 // --------- Globals (FatFs requires the FS to outlive the mount) ----------
 static FATFS fs;                 // must be static/global (lives as long as the mount)
@@ -311,7 +299,7 @@ void core1_writer(void) {
     // *_f32: physical units (ax/ay/az in g, gx/gy/gz in dps, mx/my/mz in µT)
     // *_q15: Q15 quantized values (normalized to [-1,1) then quantized to int16)
     // roll/pitch/yaw: orientation angles in degrees
-    const char *header = "timestamp_us,ax_raw,ay_raw,az_raw,gx_raw,gy_raw,gz_raw,mx_raw,my_raw,mz_raw,ax_f32,ay_f32,az_f32,gx_f32,gy_f32,gz_f32,mx_f32,my_f32,mz_f32,ax_q15,ay_q15,az_q15,gx_q15,gy_q15,gz_q15,mx_q15,my_q15,mz_q15,roll,pitch,yaw\n";
+    const char *header = "timestamp_us,ax_raw,ay_raw,az_raw,gx_raw,gy_raw,gz_raw,mx_raw,my_raw,mz_raw,ax_q15,ay_q15,az_q15,gx_q15,gy_q15,gz_q15,mx_q15,my_q15,mz_q15,roll,pitch,yaw\n";
     write_to_file(&file, header, strlen(header), &written);
 
     // Open a secondary file to store spectral peaks
@@ -382,48 +370,23 @@ void core1_writer(void) {
         Sample s;
         queue_remove_blocking(&sample_q, &s);
 
-        // Convert raw int16 to physical units (float32)
-        float f32_ax = (float)s.ax * ACCEL_SCALE;  // in g
-        float f32_ay = (float)s.ay * ACCEL_SCALE;
-        float f32_az = (float)s.az * ACCEL_SCALE;
-        float f32_gx = (float)s.gx * GYRO_SCALE;   // in dps
-        float f32_gy = (float)s.gy * GYRO_SCALE;
-        float f32_gz = (float)s.gz * GYRO_SCALE;
-        float f32_mx = (float)s.mx * MAG_SCALE;    // in µT
-        float f32_my = (float)s.my * MAG_SCALE;
-        float f32_mz = (float)s.mz * MAG_SCALE;
-        
-        // Normalize to [-1, 1) range for Q15 quantization
-        float norm_ax = f32_ax / ACCEL_RANGE;
-        float norm_ay = f32_ay / ACCEL_RANGE;
-        float norm_az = f32_az / ACCEL_RANGE;
-        float norm_gx = f32_gx / GYRO_RANGE;
-        float norm_gy = f32_gy / GYRO_RANGE;
-        float norm_gz = f32_gz / GYRO_RANGE;
-        float norm_mx = f32_mx / MAG_RANGE;
-        float norm_my = f32_my / MAG_RANGE;
-        float norm_mz = f32_mz / MAG_RANGE;
-        
-        // Quantize normalized values to Q15 format
-        float norm_vals[9] = {norm_ax, norm_ay, norm_az,
-                              norm_gx, norm_gy, norm_gz,
-                              norm_mx, norm_my, norm_mz};
+        float vals[9] = {s.ax, s.ay, s.az,
+                              s.gx, s.gy, s.gz,
+                              s.mx, s.my, s.mz};
         int16_t q15_vals[9];
         int clip_count = 0;
         
-        quantize_q15(norm_vals, 9, q15_vals, &clip_count);
+        quantize_q15(vals, 9, q15_vals, &clip_count);
         
         // Write CSV line with all three formats: raw int16, float32, quantized int16
         char line[512];
         int len = snprintf(line, sizeof line, 
             "%u,"                                           // timestamp
             "%d,%d,%d,%d,%d,%d,%d,%d,%d,"                  // raw int16 (9 values)
-            "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f," // float32 (9 values)
             "%d,%d,%d,%d,%d,%d,%d,%d,%d,"                  // quantized int16 (9 values)
-            "%.3f,%.3f,%.3f\n",                            // angles (3 values)
+            "%.3f,%.3f,%.3f\n",                            // orientation
             s.t_us,
             s.ax, s.ay, s.az, s.gx, s.gy, s.gz, s.mx, s.my, s.mz,
-            f32_ax, f32_ay, f32_az, f32_gx, f32_gy, f32_gz, f32_mx, f32_my, f32_mz,
             q15_vals[0], q15_vals[1], q15_vals[2], q15_vals[3], q15_vals[4], 
             q15_vals[5], q15_vals[6], q15_vals[7], q15_vals[8],
             s.roll, s.pitch, s.yaw);
@@ -435,26 +398,17 @@ void core1_writer(void) {
                 break;
             }
         }
-
-        // Store float32 values for statistics
-        all_raw_ax[sample_count] = f32_ax;
-        all_raw_ay[sample_count] = f32_ay;
-        all_raw_az[sample_count] = f32_az;
-        all_raw_gx[sample_count] = f32_gx;
-        all_raw_gy[sample_count] = f32_gy;
-        all_raw_gz[sample_count] = f32_gz;
-        all_raw_mx[sample_count] = f32_mx;
-        all_raw_my[sample_count] = f32_my;
-        all_raw_mz[sample_count] = f32_mz;
+        
+        // Store values for statisitcs 
         all_roll[sample_count] = s.roll;
         all_pitch[sample_count] = s.pitch;
         all_yaw[sample_count] = s.yaw;
         
-        // Dequantize Q15 back to float for statistics
+        // Dequantize Q15 back 
         float dequant_vals[9];
         dequantize_q15(q15_vals, 9, dequant_vals);
         
-        // Store dequantized values for statistics (these are in normalized [-1,1) range)
+        // Store dequantized values for statistics 
         all_q_ax[sample_count] = dequant_vals[0];
         all_q_ay[sample_count] = dequant_vals[1];
         all_q_az[sample_count] = dequant_vals[2];
@@ -464,18 +418,6 @@ void core1_writer(void) {
         all_q_mx[sample_count] = dequant_vals[6];
         all_q_my[sample_count] = dequant_vals[7];
         all_q_mz[sample_count] = dequant_vals[8];
-
-        // Accumulate normalized values for FFT (same range as will be quantized)
-        buf_ax[buf_pos] = norm_ax;
-        buf_ay[buf_pos] = norm_ay;
-        buf_az[buf_pos] = norm_az;
-        buf_gx[buf_pos] = norm_gx;
-        buf_gy[buf_pos] = norm_gy;
-        buf_gz[buf_pos] = norm_gz;
-        buf_mx[buf_pos] = norm_mx;
-        buf_my[buf_pos] = norm_my;
-        buf_mz[buf_pos] = norm_mz;
-        buf_pos++;
 
         if (buf_pos >= N_FFT) {
             // ---- Quantize & dequantize for FFT ----
@@ -663,7 +605,6 @@ void core1_writer(void) {
     min_max_f32(all_q_mz, sample_count, &q_min_mz, &q_max_mz);
     
     // Calculate SNR and error metrics for quantization quality
-    // Note: We need to normalize raw values to [-1, 1) range to compare with quantized values
     float *norm_raw_ax = (float*)malloc(sample_count * sizeof(float));
     float *norm_raw_ay = (float*)malloc(sample_count * sizeof(float));
     float *norm_raw_az = (float*)malloc(sample_count * sizeof(float));
@@ -689,20 +630,6 @@ void core1_writer(void) {
     if (norm_raw_ax && norm_raw_ay && norm_raw_az && 
         norm_raw_gx && norm_raw_gy && norm_raw_gz &&
         norm_raw_mx && norm_raw_my && norm_raw_mz) {
-        // Normalize raw values to [-1, 1) range for comparison
-        for (uint32_t i = 0; i < sample_count; i++) {
-            norm_raw_ax[i] = all_raw_ax[i] / ACCEL_RANGE;
-            norm_raw_ay[i] = all_raw_ay[i] / ACCEL_RANGE;
-            norm_raw_az[i] = all_raw_az[i] / ACCEL_RANGE;
-            norm_raw_gx[i] = all_raw_gx[i] / GYRO_RANGE;
-            norm_raw_gy[i] = all_raw_gy[i] / GYRO_RANGE;
-            norm_raw_gz[i] = all_raw_gz[i] / GYRO_RANGE;
-            norm_raw_mx[i] = all_raw_mx[i] / MAG_RANGE;
-            norm_raw_my[i] = all_raw_my[i] / MAG_RANGE;
-            norm_raw_mz[i] = all_raw_mz[i] / MAG_RANGE;
-        }
-        
-        // Compute SNR and error metrics for each axis
         
         snr_and_error(norm_raw_ax, all_q_ax, sample_count, &snr_ax, &max_err_ax, &rms_err_ax);
         snr_and_error(norm_raw_ay, all_q_ay, sample_count, &snr_ay, &max_err_ay, &rms_err_ay);
