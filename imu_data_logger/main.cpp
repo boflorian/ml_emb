@@ -111,7 +111,7 @@ static bool sd_init_and_mount(void) {
 // ------------------------- 2) File creation ------------------------------
 static FRESULT create_file(const char *abs_path, FIL *out_file) {
     // Creates/truncates a file and opens it for writing
-    printf("Creating file...\n");
+    printf("Creating file: %s\n", abs_path);
     return f_open(out_file, abs_path, FA_WRITE | FA_CREATE_ALWAYS);
 
     //return f_open(out_file, abs_path, FA_WRITE | FA_OPEN_ALWAYS);
@@ -231,16 +231,26 @@ typedef struct {
 } Sample;
 
 static queue_t sample_q;
+static volatile bool imu_ready = false;  // Synchronization flag
 
 static void core0_sampler(void)
 {
     IMU_EN_SENSOR_TYPE type;
     imuInit(&type);
     
-    sleep_ms(100); // short delay after init
-    // Allow IMU sensor to settle after initialization (2 seconds)cd
-    printf("Waiting for IMU to settle...\n");
-    sleep_ms(2000);
+    // Allow IMU sensor to settle - read and discard samples during this time
+    printf("Waiting for IMU to settle (5 seconds)...\n");
+    uint32_t settle_start = time_us_32();
+    while ((time_us_32() - settle_start) < 5000000) {  // 5 seconds in microseconds
+        // Read and discard samples during settling period
+        IMU_ST_SENSOR_DATA stGyroRawData, stAccelRawData, stMagnRawData;
+        IMU_ST_ANGLES_DATA stAngles;
+        imuDataGet(&stAngles, &stGyroRawData, &stAccelRawData, &stMagnRawData);
+        sleep_ms(10);
+    }
+    
+    // Signal that IMU is ready
+    imu_ready = true;
     printf("IMU ready, starting data collection.\n");
     
     uint32_t t_prev = (uint32_t)time_us_64();
@@ -358,6 +368,13 @@ void core1_writer(void) {
         if (fr2 == FR_OK) f_close(&spec_file);
         loop_forever_msg("Memory allocation failed");
     }
+
+    // Wait for IMU to be ready before starting data collection
+    printf("Waiting for IMU initialization...\n");
+    while (!imu_ready) {
+        sleep_ms(100);
+    }
+    printf("IMU ready signal received, starting data logging.\n");
 
     // Dequeue samples, write CSV, accumulate buffers and run FFT when full
     while (sample_count < MAX_SAMPLES) {
@@ -919,7 +936,7 @@ void core1_writer(void) {
 
 int main(void) {
     stdio_init_all();         // only here
-    sleep_ms(2000);           // optional USB settle time
+    sleep_ms(3000);           // optional USB settle time
     printf("Startup...\n");
     // initialize the shared queue before launching core1
     queue_init(&sample_q, sizeof(Sample), QUEUE_DEPTH);
