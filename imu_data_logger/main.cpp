@@ -296,10 +296,10 @@ void core1_writer(void) {
     UINT written = 0;
     // CSV Header with units clarification:
     // *_raw: raw int16 sensor values (LSB)
-    // *_f32: physical units (ax/ay/az in g, gx/gy/gz in dps, mx/my/mz in µT)
-    // *_q15: Q15 quantized values (normalized to [-1,1) then quantized to int16)
+    // *_q15: Q15 quantized values (int16, normalized to [-1,1) range)
+    // *_dequant: dequantized float values (from Q15 back to float in [-1,1) range)
     // roll/pitch/yaw: orientation angles in degrees
-    const char *header = "timestamp_us,ax_raw,ay_raw,az_raw,gx_raw,gy_raw,gz_raw,mx_raw,my_raw,mz_raw,ax_q15,ay_q15,az_q15,gx_q15,gy_q15,gz_q15,mx_q15,my_q15,mz_q15,roll,pitch,yaw\n";
+    const char *header = "timestamp_us,ax_raw,ay_raw,az_raw,gx_raw,gy_raw,gz_raw,mx_raw,my_raw,mz_raw,ax_q15,ay_q15,az_q15,gx_q15,gy_q15,gz_q15,mx_q15,my_q15,mz_q15,ax_dequant,ay_dequant,az_dequant,gx_dequant,gy_dequant,gz_dequant,mx_dequant,my_dequant,mz_dequant,roll,pitch,yaw\n";
     write_to_file(&file, header, strlen(header), &written);
 
     // Open a secondary file to store spectral peaks
@@ -378,17 +378,24 @@ void core1_writer(void) {
         
         quantize_q15(vals, 9, q15_vals, &clip_count);
         
-        // Write CSV line with all three formats: raw int16, float32, quantized int16
+        // Dequantize Q15 back to float for comparison
+        float dequant_vals[9];
+        dequantize_q15(q15_vals, 9, dequant_vals);
+        
+        // Write CSV line with all three formats: raw int16, quantized int16, dequantized float
         char line[512];
         int len = snprintf(line, sizeof line, 
             "%u,"                                           // timestamp
             "%d,%d,%d,%d,%d,%d,%d,%d,%d,"                  // raw int16 (9 values)
             "%d,%d,%d,%d,%d,%d,%d,%d,%d,"                  // quantized int16 (9 values)
+            "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f," // dequantized float (9 values)
             "%.3f,%.3f,%.3f\n",                            // orientation
             s.t_us,
             s.ax, s.ay, s.az, s.gx, s.gy, s.gz, s.mx, s.my, s.mz,
             q15_vals[0], q15_vals[1], q15_vals[2], q15_vals[3], q15_vals[4], 
             q15_vals[5], q15_vals[6], q15_vals[7], q15_vals[8],
+            dequant_vals[0], dequant_vals[1], dequant_vals[2], dequant_vals[3], dequant_vals[4],
+            dequant_vals[5], dequant_vals[6], dequant_vals[7], dequant_vals[8],
             s.roll, s.pitch, s.yaw);
         
         if (len > 0 && len < (int)sizeof line) {
@@ -399,16 +406,23 @@ void core1_writer(void) {
             }
         }
         
-        // Store values for statisitcs 
+        // Store raw values for statistics
+        all_raw_ax[sample_count] = vals[0];
+        all_raw_ay[sample_count] = vals[1];
+        all_raw_az[sample_count] = vals[2];
+        all_raw_gx[sample_count] = vals[3];
+        all_raw_gy[sample_count] = vals[4];
+        all_raw_gz[sample_count] = vals[5];
+        all_raw_mx[sample_count] = vals[6];
+        all_raw_my[sample_count] = vals[7];
+        all_raw_mz[sample_count] = vals[8];
+        
+        // Store orientation angles for statistics
         all_roll[sample_count] = s.roll;
         all_pitch[sample_count] = s.pitch;
         all_yaw[sample_count] = s.yaw;
         
-        // Dequantize Q15 back 
-        float dequant_vals[9];
-        dequantize_q15(q15_vals, 9, dequant_vals);
-        
-        // Store dequantized values for statistics 
+        // Store dequantized values for statistics (dequant_vals already computed above for CSV)
         all_q_ax[sample_count] = dequant_vals[0];
         all_q_ay[sample_count] = dequant_vals[1];
         all_q_az[sample_count] = dequant_vals[2];
@@ -418,6 +432,20 @@ void core1_writer(void) {
         all_q_mx[sample_count] = dequant_vals[6];
         all_q_my[sample_count] = dequant_vals[7];
         all_q_mz[sample_count] = dequant_vals[8];
+        
+        // Accumulate samples into FFT buffers
+        if (buf_pos < N_FFT) {
+            buf_ax[buf_pos] = vals[0];
+            buf_ay[buf_pos] = vals[1];
+            buf_az[buf_pos] = vals[2];
+            buf_gx[buf_pos] = vals[3];
+            buf_gy[buf_pos] = vals[4];
+            buf_gz[buf_pos] = vals[5];
+            buf_mx[buf_pos] = vals[6];
+            buf_my[buf_pos] = vals[7];
+            buf_mz[buf_pos] = vals[8];
+            buf_pos++;
+        }
 
         if (buf_pos >= N_FFT) {
             // ---- Quantize & dequantize for FFT ----
