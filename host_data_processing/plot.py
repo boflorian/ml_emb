@@ -50,8 +50,8 @@ def butter_highpass(cut, fs, order=2):
 # ===== Load data =====
 raw = pd.read_csv(raw_file)
 
-# Require these columns
-needed = {"timestamp_us", "ax_raw","ay_raw","az_raw","gx_raw","gy_raw","gz_raw"}
+# Require these columns (prefer _f32 physical units over _raw LSB values)
+needed = {"timestamp_us", "ax_f32","ay_f32","az_f32","gx_f32","gy_f32","gz_f32"}
 missing = needed - set(raw.columns)
 if missing:
     raise ValueError(f"Missing columns in {raw_file}: {missing}")
@@ -65,9 +65,11 @@ if len(dt) > 1:
 
 fs = 1.0 / np.median(dt)  # sampling rate (Hz), used for filters
 
-# Body-frame IMU
-acc_b = raw[["ax_raw","ay_raw","az_raw"]].to_numpy().astype(float)
-gyro = raw[["gx_raw","gy_raw","gz_raw"]].to_numpy().astype(float)  # rad/s
+# Body-frame IMU in physical units
+# ax_f32, ay_f32, az_f32 are in g (multiply by G to get m/s²)
+# gx_f32, gy_f32, gz_f32 are in dps (convert to rad/s)
+acc_b = raw[["ax_f32","ay_f32","az_f32"]].to_numpy().astype(float) * G  # Convert g → m/s²
+gyro = raw[["gx_f32","gy_f32","gz_f32"]].to_numpy().astype(float) * (np.pi/180.0)  # Convert dps → rad/s
 
 # ===== Quick bias estimation from first second (assume stationary) =====
 t_stationary = 1.0  # seconds
@@ -137,15 +139,31 @@ for k in range(1, len(t)):
 
 # ===== Plots =====
 
-# 1) Time-domain raw signals (fixed: no FFT overlaid)
-plt.figure(figsize=(10,5))
-for col in ["ax_raw","ay_raw","az_raw","gx_raw","gy_raw","gz_raw"]:
+# 1) Time-domain signals (physical units)
+plt.figure(figsize=(12,8))
+
+# Accelerometer (in g)
+plt.subplot(2, 1, 1)
+for col in ["ax_f32","ay_f32","az_f32"]:
     if col in raw.columns:
-        plt.plot(t, raw[col], label=col)
+        plt.plot(t, raw[col], label=col.replace('_f32', ''))
 plt.xlabel("Time [s]")
-plt.ylabel("Sensor Value (SI)")
-plt.title("IMU Raw Signals")
+plt.ylabel("Acceleration [g]")
+plt.title("Accelerometer (Physical Units)")
 plt.legend()
+plt.grid(alpha=0.3)
+
+# Gyroscope (in dps)
+plt.subplot(2, 1, 2)
+for col in ["gx_f32","gy_f32","gz_f32"]:
+    if col in raw.columns:
+        plt.plot(t, raw[col], label=col.replace('_f32', ''))
+plt.xlabel("Time [s]")
+plt.ylabel("Angular Rate [dps]")
+plt.title("Gyroscope (Physical Units)")
+plt.legend()
+plt.grid(alpha=0.3)
+
 plt.tight_layout()
 plt.show()
 
