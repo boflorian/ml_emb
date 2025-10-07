@@ -28,6 +28,18 @@
 #define SAMPLE_RATE_HZ 100.0f // approximate (sleep_ms(10) in sampler)
 #define MAX_SAMPLES 1000 // limit for data collection
 
+// ICM-20948 sensor normalization constants
+// These convert raw int16 values to normalized [-1, 1) range for Q15 quantization
+// Accelerometer: ±2g range, 16384 LSB/g → normalize by dividing by max expected g (e.g., 2g)
+#define ACCEL_SCALE (1.0f / 16384.0f)  // Converts LSB to g, then divide by max range
+#define ACCEL_RANGE 2.0f                // ±2g, so full range is 4g peak-to-peak
+// Gyroscope: ±250 dps range, 131 LSB/dps → normalize by dividing by max expected dps
+#define GYRO_SCALE (1.0f / 131.0f)     // Converts LSB to dps
+#define GYRO_RANGE 250.0f               // ±250 dps, so full range is 500 dps peak-to-peak
+// Magnetometer: ±4900 µT range, 0.15 µT/LSB
+#define MAG_SCALE 0.15f                 // Converts LSB to µT
+#define MAG_RANGE 4900.0f               // ±4900 µT
+
 
 // --------- Globals (FatFs requires the FS to outlive the mount) ----------
 static FATFS fs;                 // must be static/global (lives as long as the mount)
@@ -99,7 +111,7 @@ static bool sd_init_and_mount(void) {
 // ------------------------- 2) File creation ------------------------------
 static FRESULT create_file(const char *abs_path, FIL *out_file) {
     // Creates/truncates a file and opens it for writing
-    printf("In create file func\n");
+    printf("Creating file...\n");
     return f_open(out_file, abs_path, FA_WRITE | FA_CREATE_ALWAYS);
 
     //return f_open(out_file, abs_path, FA_WRITE | FA_OPEN_ALWAYS);
@@ -276,6 +288,11 @@ void core1_writer(void) {
     if (fr != FR_OK) die(fr, "f_open");
 
     UINT written = 0;
+    // CSV Header with units clarification:
+    // *_raw: raw int16 sensor values (LSB)
+    // *_f32: physical units (ax/ay/az in g, gx/gy/gz in dps, mx/my/mz in µT)
+    // *_q15: Q15 quantized values (normalized to [-1,1) then quantized to int16)
+    // roll/pitch/yaw: orientation angles in degrees
     const char *header = "timestamp_us,ax_raw,ay_raw,az_raw,gx_raw,gy_raw,gz_raw,mx_raw,my_raw,mz_raw,ax_f32,ay_f32,az_f32,gx_f32,gy_f32,gz_f32,mx_f32,my_f32,mz_f32,ax_q15,ay_q15,az_q15,gx_q15,gy_q15,gz_q15,mx_q15,my_q15,mz_q15,roll,pitch,yaw\n";
     write_to_file(&file, header, strlen(header), &written);
 
@@ -340,25 +357,36 @@ void core1_writer(void) {
         Sample s;
         queue_remove_blocking(&sample_q, &s);
 
-        // Convert raw int16 to float32 (standard conversion)
-        float f32_ax = (float)s.ax;
-        float f32_ay = (float)s.ay;
-        float f32_az = (float)s.az;
-        float f32_gx = (float)s.gx;
-        float f32_gy = (float)s.gy;
-        float f32_gz = (float)s.gz;
-        float f32_mx = (float)s.mx;
-        float f32_my = (float)s.my;
-        float f32_mz = (float)s.mz;
+        // Convert raw int16 to physical units (float32)
+        float f32_ax = (float)s.ax * ACCEL_SCALE;  // in g
+        float f32_ay = (float)s.ay * ACCEL_SCALE;
+        float f32_az = (float)s.az * ACCEL_SCALE;
+        float f32_gx = (float)s.gx * GYRO_SCALE;   // in dps
+        float f32_gy = (float)s.gy * GYRO_SCALE;
+        float f32_gz = (float)s.gz * GYRO_SCALE;
+        float f32_mx = (float)s.mx * MAG_SCALE;    // in µT
+        float f32_my = (float)s.my * MAG_SCALE;
+        float f32_mz = (float)s.mz * MAG_SCALE;
         
-        // Quantize to Q15 format
-        float raw_vals[9] = {f32_ax, f32_ay, f32_az,
-                             f32_gx, f32_gy, f32_gz,
-                             f32_mx, f32_my, f32_mz};
+        // Normalize to [-1, 1) range for Q15 quantization
+        float norm_ax = f32_ax / ACCEL_RANGE;
+        float norm_ay = f32_ay / ACCEL_RANGE;
+        float norm_az = f32_az / ACCEL_RANGE;
+        float norm_gx = f32_gx / GYRO_RANGE;
+        float norm_gy = f32_gy / GYRO_RANGE;
+        float norm_gz = f32_gz / GYRO_RANGE;
+        float norm_mx = f32_mx / MAG_RANGE;
+        float norm_my = f32_my / MAG_RANGE;
+        float norm_mz = f32_mz / MAG_RANGE;
+        
+        // Quantize normalized values to Q15 format
+        float norm_vals[9] = {norm_ax, norm_ay, norm_az,
+                              norm_gx, norm_gy, norm_gz,
+                              norm_mx, norm_my, norm_mz};
         int16_t q15_vals[9];
         int clip_count = 0;
         
-        quantize_q15(raw_vals, 9, q15_vals, &clip_count);
+        quantize_q15(norm_vals, 9, q15_vals, &clip_count);
         
         // Write CSV line with all three formats: raw int16, float32, quantized int16
         char line[512];
@@ -401,7 +429,7 @@ void core1_writer(void) {
         float dequant_vals[9];
         dequantize_q15(q15_vals, 9, dequant_vals);
         
-        // Store dequantized values for statistics
+        // Store dequantized values for statistics (these are in normalized [-1,1) range)
         all_q_ax[sample_count] = dequant_vals[0];
         all_q_ay[sample_count] = dequant_vals[1];
         all_q_az[sample_count] = dequant_vals[2];
@@ -412,16 +440,16 @@ void core1_writer(void) {
         all_q_my[sample_count] = dequant_vals[7];
         all_q_mz[sample_count] = dequant_vals[8];
 
-        // accumulate for FFT (use raw sensor values, not quantized)
-        buf_ax[buf_pos] = (float)s.ax;
-        buf_ay[buf_pos] = (float)s.ay;
-        buf_az[buf_pos] = (float)s.az;
-        buf_gx[buf_pos] = (float)s.gx;
-        buf_gy[buf_pos] = (float)s.gy;
-        buf_gz[buf_pos] = (float)s.gz;
-        buf_mx[buf_pos] = (float)s.mx;
-        buf_my[buf_pos] = (float)s.my;
-        buf_mz[buf_pos] = (float)s.mz;
+        // Accumulate normalized values for FFT (same range as will be quantized)
+        buf_ax[buf_pos] = norm_ax;
+        buf_ay[buf_pos] = norm_ay;
+        buf_az[buf_pos] = norm_az;
+        buf_gx[buf_pos] = norm_gx;
+        buf_gy[buf_pos] = norm_gy;
+        buf_gz[buf_pos] = norm_gz;
+        buf_mx[buf_pos] = norm_mx;
+        buf_my[buf_pos] = norm_my;
+        buf_mz[buf_pos] = norm_mz;
         buf_pos++;
 
         if (buf_pos >= N_FFT) {
@@ -615,7 +643,13 @@ void core1_writer(void) {
     printf("========================================\n");
     printf("Total samples: %u\n\n", sample_count);
     
-    printf("--- RAW Values (from sensor) ---\n\n");
+    printf("NOTE: Raw values are in physical units:\n");
+    printf("  - Accelerometer: g (1g = 9.81 m/s²)\n");
+    printf("  - Gyroscope: dps (degrees per second)\n");
+    printf("  - Magnetometer: µT (microtesla)\n");
+    printf("  - Quantized values: normalized [-1, 1) range\n\n");
+    
+    printf("--- RAW Values (Physical Units) ---\n\n");
     printf("Accelerometer X (ax):\n");
     printf("  Mean:     %.6f\n", raw_mean_ax);
     printf("  Median:   %.6f\n", raw_med_ax);
@@ -640,7 +674,7 @@ void core1_writer(void) {
     printf("  Min:      %.6f\n", raw_min_az);
     printf("  Max:      %.6f\n\n", raw_max_az);
     
-    printf("--- QUANTIZED Values (Q15 format) ---\n\n");
+    printf("--- QUANTIZED Values (Normalized [-1, 1) range) ---\n\n");
     printf("Accelerometer X (ax):\n");
     printf("  Mean:     %.6f\n", q_mean_ax);
     printf("  Median:   %.6f\n", q_med_ax);
@@ -712,7 +746,12 @@ void core1_writer(void) {
         
         // Write RAW statistics
         len = snprintf(stats_buf, sizeof stats_buf,
-            "--- RAW Values (from sensor) ---\n\n");
+            "NOTE: Raw values are in physical units:\n"
+            "  - Accelerometer: g (1g = 9.81 m/s²)\n"
+            "  - Gyroscope: dps (degrees per second)\n"
+            "  - Magnetometer: µT (microtesla)\n"
+            "  - Quantized values: normalized [-1, 1) range\n\n"
+            "--- RAW Values (Physical Units) ---\n\n");
         write_to_file(&stats_file, stats_buf, len, &bw);
         
         len = snprintf(stats_buf, sizeof stats_buf,
@@ -780,7 +819,7 @@ void core1_writer(void) {
         
         // Write QUANTIZED statistics
         len = snprintf(stats_buf, sizeof stats_buf,
-            "--- QUANTIZED Values (Q15 format) ---\n\n");
+            "--- QUANTIZED Values (Normalized [-1, 1) range) ---\n\n");
         write_to_file(&stats_file, stats_buf, len, &bw);
         
         len = snprintf(stats_buf, sizeof stats_buf,
