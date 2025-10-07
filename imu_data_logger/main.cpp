@@ -239,6 +239,7 @@ static void core0_sampler(void)
     imuInit(&type);
     
     // Allow IMU sensor to settle - read and discard samples during this time
+    // Settling avoids wrong data in world z direction (gravity)
     printf("Waiting for IMU to settle (5 seconds)...\n");
     uint32_t settle_start = time_us_32();
     while ((time_us_32() - settle_start) < 5000000) {  // 5 seconds in microseconds
@@ -249,7 +250,6 @@ static void core0_sampler(void)
         sleep_ms(10);
     }
     
-    // Signal that IMU is ready
     imu_ready = true;
     printf("IMU ready, starting data collection.\n");
     
@@ -265,11 +265,12 @@ static void core0_sampler(void)
                       stAngles.fRoll, stAngles.fPitch, stAngles.fYaw,
                       t_now };
         queue_add_blocking(&sample_q, &s);
-        // pace sampling to ~SAMPLE_RATE_HZ to match previous behavior
         sleep_ms(10);
     }
 }
 
+
+// remove ? 
 void test_sd_write(void) {
     char path[PATH_MAX_LEN];
     join_path(path, sizeof path, g_drive, "sd_test.txt");
@@ -291,7 +292,7 @@ void test_sd_write(void) {
 }
 
 void core1_writer(void) {
-    sleep_ms(1500); // optional
+    sleep_ms(1500); // delays generally help to capture all output in serial terminal 
 
     if (!sd_init_and_mount()) {
         loop_forever_msg("SD init failed");
@@ -661,6 +662,125 @@ void core1_writer(void) {
     min_max_f32(all_q_my, sample_count, &q_min_my, &q_max_my);
     min_max_f32(all_q_mz, sample_count, &q_min_mz, &q_max_mz);
     
+    // Calculate SNR and error metrics for quantization quality
+    // Note: We need to normalize raw values to [-1, 1) range to compare with quantized values
+    float *norm_raw_ax = (float*)malloc(sample_count * sizeof(float));
+    float *norm_raw_ay = (float*)malloc(sample_count * sizeof(float));
+    float *norm_raw_az = (float*)malloc(sample_count * sizeof(float));
+    float *norm_raw_gx = (float*)malloc(sample_count * sizeof(float));
+    float *norm_raw_gy = (float*)malloc(sample_count * sizeof(float));
+    float *norm_raw_gz = (float*)malloc(sample_count * sizeof(float));
+    float *norm_raw_mx = (float*)malloc(sample_count * sizeof(float));
+    float *norm_raw_my = (float*)malloc(sample_count * sizeof(float));
+    float *norm_raw_mz = (float*)malloc(sample_count * sizeof(float));
+    
+    // Declare SNR variables outside if block for later use
+    float snr_ax = 0.0f, max_err_ax = 0.0f, rms_err_ax = 0.0f;
+    float snr_ay = 0.0f, max_err_ay = 0.0f, rms_err_ay = 0.0f;
+    float snr_az = 0.0f, max_err_az = 0.0f, rms_err_az = 0.0f;
+    float snr_gx = 0.0f, max_err_gx = 0.0f, rms_err_gx = 0.0f;
+    float snr_gy = 0.0f, max_err_gy = 0.0f, rms_err_gy = 0.0f;
+    float snr_gz = 0.0f, max_err_gz = 0.0f, rms_err_gz = 0.0f;
+    float snr_mx = 0.0f, max_err_mx = 0.0f, rms_err_mx = 0.0f;
+    float snr_my = 0.0f, max_err_my = 0.0f, rms_err_my = 0.0f;
+    float snr_mz = 0.0f, max_err_mz = 0.0f, rms_err_mz = 0.0f;
+    bool snr_computed = false;
+    
+    if (norm_raw_ax && norm_raw_ay && norm_raw_az && 
+        norm_raw_gx && norm_raw_gy && norm_raw_gz &&
+        norm_raw_mx && norm_raw_my && norm_raw_mz) {
+        // Normalize raw values to [-1, 1) range for comparison
+        for (uint32_t i = 0; i < sample_count; i++) {
+            norm_raw_ax[i] = all_raw_ax[i] / ACCEL_RANGE;
+            norm_raw_ay[i] = all_raw_ay[i] / ACCEL_RANGE;
+            norm_raw_az[i] = all_raw_az[i] / ACCEL_RANGE;
+            norm_raw_gx[i] = all_raw_gx[i] / GYRO_RANGE;
+            norm_raw_gy[i] = all_raw_gy[i] / GYRO_RANGE;
+            norm_raw_gz[i] = all_raw_gz[i] / GYRO_RANGE;
+            norm_raw_mx[i] = all_raw_mx[i] / MAG_RANGE;
+            norm_raw_my[i] = all_raw_my[i] / MAG_RANGE;
+            norm_raw_mz[i] = all_raw_mz[i] / MAG_RANGE;
+        }
+        
+        // Compute SNR and error metrics for each axis
+        
+        snr_and_error(norm_raw_ax, all_q_ax, sample_count, &snr_ax, &max_err_ax, &rms_err_ax);
+        snr_and_error(norm_raw_ay, all_q_ay, sample_count, &snr_ay, &max_err_ay, &rms_err_ay);
+        snr_and_error(norm_raw_az, all_q_az, sample_count, &snr_az, &max_err_az, &rms_err_az);
+        snr_and_error(norm_raw_gx, all_q_gx, sample_count, &snr_gx, &max_err_gx, &rms_err_gx);
+        snr_and_error(norm_raw_gy, all_q_gy, sample_count, &snr_gy, &max_err_gy, &rms_err_gy);
+        snr_and_error(norm_raw_gz, all_q_gz, sample_count, &snr_gz, &max_err_gz, &rms_err_gz);
+        snr_and_error(norm_raw_mx, all_q_mx, sample_count, &snr_mx, &max_err_mx, &rms_err_mx);
+        snr_and_error(norm_raw_my, all_q_my, sample_count, &snr_my, &max_err_my, &rms_err_my);
+        snr_and_error(norm_raw_mz, all_q_mz, sample_count, &snr_mz, &max_err_mz, &rms_err_mz);
+        
+        snr_computed = true;
+        
+        // Print SNR and error analysis
+        printf("\n========================================\n");
+        printf("=== Quantization Quality Analysis ===\n");
+        printf("========================================\n");
+        printf("Comparing normalized raw vs quantized values\n\n");
+        
+        printf("Accelerometer X (ax):\n");
+        printf("  SNR:         %.2f dB\n", snr_ax);
+        printf("  Max Error:   %.6f\n", max_err_ax);
+        printf("  RMS Error:   %.6f\n\n", rms_err_ax);
+        
+        printf("Accelerometer Y (ay):\n");
+        printf("  SNR:         %.2f dB\n", snr_ay);
+        printf("  Max Error:   %.6f\n", max_err_ay);
+        printf("  RMS Error:   %.6f\n\n", rms_err_ay);
+        
+        printf("Accelerometer Z (az):\n");
+        printf("  SNR:         %.2f dB\n", snr_az);
+        printf("  Max Error:   %.6f\n", max_err_az);
+        printf("  RMS Error:   %.6f\n\n", rms_err_az);
+        
+        printf("Gyroscope X (gx):\n");
+        printf("  SNR:         %.2f dB\n", snr_gx);
+        printf("  Max Error:   %.6f\n", max_err_gx);
+        printf("  RMS Error:   %.6f\n\n", rms_err_gx);
+        
+        printf("Gyroscope Y (gy):\n");
+        printf("  SNR:         %.2f dB\n", snr_gy);
+        printf("  Max Error:   %.6f\n", max_err_gy);
+        printf("  RMS Error:   %.6f\n\n", rms_err_gy);
+        
+        printf("Gyroscope Z (gz):\n");
+        printf("  SNR:         %.2f dB\n", snr_gz);
+        printf("  Max Error:   %.6f\n", max_err_gz);
+        printf("  RMS Error:   %.6f\n\n", rms_err_gz);
+        
+        printf("Magnetometer X (mx):\n");
+        printf("  SNR:         %.2f dB\n", snr_mx);
+        printf("  Max Error:   %.6f\n", max_err_mx);
+        printf("  RMS Error:   %.6f\n\n", rms_err_mx);
+        
+        printf("Magnetometer Y (my):\n");
+        printf("  SNR:         %.2f dB\n", snr_my);
+        printf("  Max Error:   %.6f\n", max_err_my);
+        printf("  RMS Error:   %.6f\n\n", rms_err_my);
+        
+        printf("Magnetometer Z (mz):\n");
+        printf("  SNR:         %.2f dB\n", snr_mz);
+        printf("  Max Error:   %.6f\n", max_err_mz);
+        printf("  RMS Error:   %.6f\n\n", rms_err_mz);
+        
+        // Free normalized arrays (we'll save SNR values for file writing)
+        free(norm_raw_ax);
+        free(norm_raw_ay);
+        free(norm_raw_az);
+        free(norm_raw_gx);
+        free(norm_raw_gy);
+        free(norm_raw_gz);
+        free(norm_raw_mx);
+        free(norm_raw_my);
+        free(norm_raw_mz);
+    } else {
+        printf("Failed to allocate memory for SNR analysis\n");
+    }
+    
     // Print statistics to console
     printf("\n========================================\n");
     printf("=== IMU Data Statistics ===\n");
@@ -893,11 +1013,49 @@ void core1_writer(void) {
             "Magnetometer (quantized):\n"
             "  mx: Mean=%.6f Std=%.6f Min=%.6f Max=%.6f\n"
             "  my: Mean=%.6f Std=%.6f Min=%.6f Max=%.6f\n"
-            "  mz: Mean=%.6f Std=%.6f Min=%.6f Max=%.6f\n",
+            "  mz: Mean=%.6f Std=%.6f Min=%.6f Max=%.6f\n\n",
             q_mean_mx, q_std_mx, q_min_mx, q_max_mx,
             q_mean_my, q_std_my, q_min_my, q_max_my,
             q_mean_mz, q_std_mz, q_min_mz, q_max_mz);
         write_to_file(&stats_file, stats_buf, len, &bw);
+        
+        // Write SNR and error analysis if computed
+        if (snr_computed) {
+            len = snprintf(stats_buf, sizeof stats_buf,
+                "--- Quantization Quality Analysis ---\n"
+                "Comparing normalized raw vs quantized values\n\n");
+            write_to_file(&stats_file, stats_buf, len, &bw);
+            
+            len = snprintf(stats_buf, sizeof stats_buf,
+                "Accelerometer:\n"
+                "  ax: SNR=%.2f dB  Max Error=%.6f  RMS Error=%.6f\n"
+                "  ay: SNR=%.2f dB  Max Error=%.6f  RMS Error=%.6f\n"
+                "  az: SNR=%.2f dB  Max Error=%.6f  RMS Error=%.6f\n\n",
+                snr_ax, max_err_ax, rms_err_ax,
+                snr_ay, max_err_ay, rms_err_ay,
+                snr_az, max_err_az, rms_err_az);
+            write_to_file(&stats_file, stats_buf, len, &bw);
+            
+            len = snprintf(stats_buf, sizeof stats_buf,
+                "Gyroscope:\n"
+                "  gx: SNR=%.2f dB  Max Error=%.6f  RMS Error=%.6f\n"
+                "  gy: SNR=%.2f dB  Max Error=%.6f  RMS Error=%.6f\n"
+                "  gz: SNR=%.2f dB  Max Error=%.6f  RMS Error=%.6f\n\n",
+                snr_gx, max_err_gx, rms_err_gx,
+                snr_gy, max_err_gy, rms_err_gy,
+                snr_gz, max_err_gz, rms_err_gz);
+            write_to_file(&stats_file, stats_buf, len, &bw);
+            
+            len = snprintf(stats_buf, sizeof stats_buf,
+                "Magnetometer:\n"
+                "  mx: SNR=%.2f dB  Max Error=%.6f  RMS Error=%.6f\n"
+                "  my: SNR=%.2f dB  Max Error=%.6f  RMS Error=%.6f\n"
+                "  mz: SNR=%.2f dB  Max Error=%.6f  RMS Error=%.6f\n",
+                snr_mx, max_err_mx, rms_err_mx,
+                snr_my, max_err_my, rms_err_my,
+                snr_mz, max_err_mz, rms_err_mz);
+            write_to_file(&stats_file, stats_buf, len, &bw);
+        }
         
         f_close(&stats_file);
         printf("Statistics written to %s\n", stats_path);
