@@ -21,12 +21,23 @@
 #include "pico/util/queue.h"
 
 
+// ============================================================================
+// CONFIGURATION SETTINGS - Adjust these to change system behavior
+// ============================================================================
+#define SAMPLE_RATE_HZ 100      // Desired sampling rate in Hz (must be integer)
+                                 // Common values: 50, 100, 200
+                                 // Sleep time = 1000 / SAMPLE_RATE_HZ milliseconds
+#define MAX_SAMPLES 1000        // Maximum number of samples to collect before stopping
+                                 // Total duration = MAX_SAMPLES / SAMPLE_RATE_HZ seconds
+                                 // Example: 1000 samples @ 100 Hz = 10 seconds
+
+// ============================================================================
+// System Constants (usually don't need to change these)
+// ============================================================================
 #define PATH_MAX_LEN 256
 #define QUEUE_DEPTH 1024
-#define N_FFT 256
-#define FFT_PEAKS 3
-#define SAMPLE_RATE_HZ 100.0f // approximate (sleep_ms(10) in sampler)
-#define MAX_SAMPLES 1000 // limit for data collection
+#define N_FFT 256               // FFT window size (must be power of 2)
+#define FFT_PEAKS 3             // Number of spectral peaks to extract per axis
 
 // ICM-20948 sensor normalization constants
 // Step 1: Convert raw int16 to physical units
@@ -252,7 +263,11 @@ static void core0_sampler(void)
     }
     
     imu_ready = true;
-    printf("IMU ready, starting data collection.\n");
+    printf("IMU ready, starting data collection at %d Hz.\n", SAMPLE_RATE_HZ);
+    
+    // Calculate sleep time in milliseconds from sample rate
+    const uint32_t sleep_ms_val = 1000 / SAMPLE_RATE_HZ;
+    printf("Sampling period: %u ms\n", sleep_ms_val);
     
     uint32_t t_prev = (uint32_t)time_us_64();
     while (1) {
@@ -266,7 +281,7 @@ static void core0_sampler(void)
                       stAngles.fRoll, stAngles.fPitch, stAngles.fYaw,
                       t_now };
         queue_add_blocking(&sample_q, &s);
-        sleep_ms(10);
+        sleep_ms(sleep_ms_val);
     }
 }
 
@@ -380,10 +395,20 @@ void core1_writer(void) {
     }
     printf("IMU ready signal received, starting data logging.\n");
 
+    // Track timestamps for achieved sampling rate calculation
+    uint32_t first_timestamp = 0;
+    uint32_t last_timestamp = 0;
+
     // Dequeue samples, write CSV, accumulate buffers and run FFT when full
     while (sample_count < MAX_SAMPLES) {
         Sample s;
         queue_remove_blocking(&sample_q, &s);
+        
+        // Capture first and last timestamps
+        if (sample_count == 0) {
+            first_timestamp = s.t_us;
+        }
+        last_timestamp = s.t_us;
 
         // Convert raw int16 to physical units (float32)
         float f32_ax = (float)s.ax * ACCEL_SCALE;  // in g
@@ -473,51 +498,23 @@ void core1_writer(void) {
         all_q_my[sample_count] = dequant_vals[7];
         all_q_mz[sample_count] = dequant_vals[8];
 
-        // Accumulate normalized values for FFT (same range as will be quantized)
-        buf_ax[buf_pos] = norm_ax;
-        buf_ay[buf_pos] = norm_ay;
-        buf_az[buf_pos] = norm_az;
-        buf_gx[buf_pos] = norm_gx;
-        buf_gy[buf_pos] = norm_gy;
-        buf_gz[buf_pos] = norm_gz;
-        buf_mx[buf_pos] = norm_mx;
-        buf_my[buf_pos] = norm_my;
-        buf_mz[buf_pos] = norm_mz;
+        // Accumulate DEQUANTIZED values for FFT to simulate Q15-based processing
+        // This shows what the FFT would look like after quantization/dequantization
+        buf_ax[buf_pos] = dequant_vals[0];
+        buf_ay[buf_pos] = dequant_vals[1];
+        buf_az[buf_pos] = dequant_vals[2];
+        buf_gx[buf_pos] = dequant_vals[3];
+        buf_gy[buf_pos] = dequant_vals[4];
+        buf_gz[buf_pos] = dequant_vals[5];
+        buf_mx[buf_pos] = dequant_vals[6];
+        buf_my[buf_pos] = dequant_vals[7];
+        buf_mz[buf_pos] = dequant_vals[8];
         buf_pos++;
 
-        if (buf_pos >= N_FFT) {
-            // ---- Quantize & dequantize for FFT ----
-            int16_t q15_ax[N_FFT], q15_ay[N_FFT], q15_az[N_FFT];
-            int16_t q15_gx[N_FFT], q15_gy[N_FFT], q15_gz[N_FFT];
-            int16_t q15_mx[N_FFT], q15_my[N_FFT], q15_mz[N_FFT];
-            int clips_ax = 0, clips_ay = 0, clips_az = 0;
-            int clips_gx = 0, clips_gy = 0, clips_gz = 0;
-            int clips_mx = 0, clips_my = 0, clips_mz = 0;
+        // --------------------------------- FFT -------------------------------
 
-            quantize_q15(buf_ax, N_FFT, q15_ax, &clips_ax);
-            quantize_q15(buf_ay, N_FFT, q15_ay, &clips_ay);
-            quantize_q15(buf_az, N_FFT, q15_az, &clips_az);
-            quantize_q15(buf_gx, N_FFT, q15_gx, &clips_gx);
-            quantize_q15(buf_gy, N_FFT, q15_gy, &clips_gy);
-            quantize_q15(buf_gz, N_FFT, q15_gz, &clips_gz);
-            quantize_q15(buf_mx, N_FFT, q15_mx, &clips_mx);
-            quantize_q15(buf_my, N_FFT, q15_my, &clips_my);
-            quantize_q15(buf_mz, N_FFT, q15_mz, &clips_mz);
-
-            dequantize_q15(q15_ax, N_FFT, buf_ax);
-            dequantize_q15(q15_ay, N_FFT, buf_ay);
-            dequantize_q15(q15_az, N_FFT, buf_az);
-            dequantize_q15(q15_gx, N_FFT, buf_gx);
-            dequantize_q15(q15_gy, N_FFT, buf_gy);
-            dequantize_q15(q15_gz, N_FFT, buf_gz);
-            dequantize_q15(q15_mx, N_FFT, buf_mx);
-            dequantize_q15(q15_my, N_FFT, buf_my);
-            dequantize_q15(q15_mz, N_FFT, buf_mz);
-
-            printf("Quantization clips: ax=%d, ay=%d, az=%d, gx=%d, gy=%d, gz=%d, mx=%d, my=%d, mz=%d\n", 
-                   clips_ax, clips_ay, clips_az, clips_gx, clips_gy, clips_gz, clips_mx, clips_my, clips_mz);
-
-            // process each axis sequentially (all 9 channels)
+        if (buf_pos >= N_FFT) {            
+            // Process each axis sequentially (all 9 channels)
             c32 X[N_FFT];
             float mag[N_FFT];
             int idx[FFT_PEAKS]; float val[FFT_PEAKS]; int found = 0;
@@ -543,7 +540,7 @@ void core1_writer(void) {
                     if (fr2 == FR_OK) {
                         // write peaks to spec file
                         for (int p = 0; p < found; p++) {
-                            float freq = ((float)idx[p]) * (SAMPLE_RATE_HZ / (float)N_FFT);
+                            float freq = ((float)idx[p]) * ((float)SAMPLE_RATE_HZ / (float)N_FFT);
                             const char *axname = (axis == 0) ? "ax" : (axis == 1) ? "ay" : (axis == 2) ? "az" :
                                                  (axis == 3) ? "gx" : (axis == 4) ? "gy" : (axis == 5) ? "gz" :
                                                  (axis == 6) ? "mx" : (axis == 7) ? "my" : "mz";
@@ -563,6 +560,7 @@ void core1_writer(void) {
         
         sample_count++;
     }
+    // -------------------------------- End of sampling loop -----------------------------
     
     printf("\nReached sample limit (%u samples). Computing statistics...\n", sample_count);
     
@@ -671,7 +669,6 @@ void core1_writer(void) {
     min_max_f32(all_q_mz, sample_count, &q_min_mz, &q_max_mz);
     
     // Calculate SNR and error metrics for quantization quality
-    // Note: We need to normalize raw values to [-1, 1) range to compare with quantized values
     float *norm_raw_ax = (float*)malloc(sample_count * sizeof(float));
     float *norm_raw_ay = (float*)malloc(sample_count * sizeof(float));
     float *norm_raw_az = (float*)malloc(sample_count * sizeof(float));
@@ -895,6 +892,15 @@ void core1_writer(void) {
         len = snprintf(stats_buf, sizeof stats_buf, 
             "Total samples: %u\n\n", sample_count);
         write_to_file(&stats_file, stats_buf, len, &bw);
+
+        // Sampling Rate 
+        float duration_s = (float)(last_timestamp - first_timestamp) / 1e6f;  // Convert µs to seconds
+        float achieved_rate = (sample_count > 1) ? (float)(sample_count - 1) / duration_s : 0.0f;
+        len = snprintf(stats_buf, sizeof stats_buf,
+            "Configured Sampling Rate: %u Hz\n"
+            "Achieved Sampling Rate: %.2f Hz\n"
+            "Duration: %.3f seconds\n\n",
+            SAMPLE_RATE_HZ, achieved_rate, duration_s);
         
         // Write RAW statistics
         len = snprintf(stats_buf, sizeof stats_buf,
@@ -1103,7 +1109,19 @@ void core1_writer(void) {
 int main(void) {
     stdio_init_all();         // only here
     sleep_ms(3000);           // optional USB settle time
-    printf("Startup...\n");
+    
+    printf("\n========================================\n");
+    printf("IMU Data Logger - Starting Up\n");
+    printf("========================================\n");
+    printf("Configuration:\n");
+    printf("  Sample Rate: %d Hz\n", SAMPLE_RATE_HZ);
+    printf("  Max Samples: %d\n", MAX_SAMPLES);
+    printf("  Duration:    %.1f seconds\n", (float)MAX_SAMPLES / (float)SAMPLE_RATE_HZ);
+    printf("  FFT Size:    %d samples\n", N_FFT);
+    printf("  FFT Window:  %.2f seconds\n", (float)N_FFT / (float)SAMPLE_RATE_HZ);
+    printf("  Nyquist:     %.1f Hz\n", (float)SAMPLE_RATE_HZ / 2.0f);
+    printf("========================================\n\n");
+    
     // initialize the shared queue before launching core1
     queue_init(&sample_q, sizeof(Sample), QUEUE_DEPTH);
 
