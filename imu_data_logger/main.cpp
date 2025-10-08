@@ -133,9 +133,9 @@ static FRESULT create_file(const char *abs_path, FIL *out_file) {
 static FRESULT write_to_file(FIL *file, const void *data, UINT len, UINT *bytes_written) {
     *bytes_written = 0;
     FRESULT fr = f_write(file, data, len, bytes_written);
-    if (fr == FR_OK) {
-        fr = f_sync(file); // ensure data hits the card
-    }
+    //if (fr == FR_OK) {
+    //    fr = f_sync(file); // ensure data hits the card
+    //}
     return fr;
 }
 
@@ -254,9 +254,10 @@ static void core0_sampler(void)
     printf("Waiting for IMU to settle (5 seconds)...\n");
     uint32_t settle_start = time_us_32();
     while ((time_us_32() - settle_start) < 5000000) {  // 5 seconds in microseconds
-        // Read and discard samples during settling period
-        IMU_ST_SENSOR_DATA stGyroRawData, stAccelRawData, stMagnRawData;
-        imuDataGet(NULL, &stGyroRawData, &stAccelRawData, &stMagnRawData);
+        // Read and discard samples during settling period (direct fast burst reads)
+        int16_t ax, ay, az, gx, gy, gz;
+        icm20948AccelFastRead(&ax, &ay, &az);
+        icm20948GyroFastRead(&gx, &gy, &gz);
         sleep_ms(10);
     }
     
@@ -268,14 +269,18 @@ static void core0_sampler(void)
     printf("Sampling period: %u ms\n", sleep_ms_val);
     
     while (1) {
-        IMU_ST_SENSOR_DATA stGyroRawData, stAccelRawData, stMagnRawData;
-        // Read only raw sensor data (no angle calculations for speed)
-        imuDataGet(NULL, &stGyroRawData, &stAccelRawData, &stMagnRawData);
+        int16_t ax, ay, az, gx, gy, gz, mx, my, mz;
+        
+        // Direct fast burst read calls 
+        icm20948AccelFastRead(&ax, &ay, &az);
+        icm20948GyroFastRead(&gx, &gy, &gz);
+        
         uint32_t t_now = (uint32_t)time_us_64();
-        Sample s = { stAccelRawData.s16X, stAccelRawData.s16Y, stAccelRawData.s16Z,
-                      stGyroRawData.s16X, stGyroRawData.s16Y, stGyroRawData.s16Z,
-                      stMagnRawData.s16X, stMagnRawData.s16Y, stMagnRawData.s16Z,
-                      t_now };
+        
+        // Magnetometer not read (bottleneck)
+        mx = 0; my = 0; mz = 0;
+        
+        Sample s = { ax, ay, az, gx, gy, gz, mx, my, mz, t_now };
         queue_add_blocking(&sample_q, &s);
         sleep_ms(sleep_ms_val);
     }
@@ -761,89 +766,14 @@ void core1_writer(void) {
     
     // Print statistics to console
     printf("\n========================================\n");
-    printf("=== IMU Data Statistics ===\n");
-    printf("========================================\n");
     printf("Total samples: %u\n\n", sample_count);
-    
-    printf("NOTE: Raw values are in physical units:\n");
-    printf("  - Accelerometer: g (1g = 9.81 m/s²)\n");
-    printf("  - Gyroscope: dps (degrees per second)\n");
-    printf("  - Magnetometer: µT (microtesla)\n");
-    printf("  - Quantized values: normalized [-1, 1) range\n\n");
-    
-    printf("--- RAW Values (Physical Units) ---\n\n");
-    printf("Accelerometer X (ax):\n");
-    printf("  Mean:     %.6f\n", raw_mean_ax);
-    printf("  Median:   %.6f\n", raw_med_ax);
-    printf("  Variance: %.6f\n", raw_var_ax);
-    printf("  Std Dev:  %.6f\n", raw_std_ax);
-    printf("  Min:      %.6f\n", raw_min_ax);
-    printf("  Max:      %.6f\n\n", raw_max_ax);
-    
-    printf("Accelerometer Y (ay):\n");
-    printf("  Mean:     %.6f\n", raw_mean_ay);
-    printf("  Median:   %.6f\n", raw_med_ay);
-    printf("  Variance: %.6f\n", raw_var_ay);
-    printf("  Std Dev:  %.6f\n", raw_std_ay);
-    printf("  Min:      %.6f\n", raw_min_ay);
-    printf("  Max:      %.6f\n\n", raw_max_ay);
-    
-    printf("Accelerometer Z (az):\n");
-    printf("  Mean:     %.6f\n", raw_mean_az);
-    printf("  Median:   %.6f\n", raw_med_az);
-    printf("  Variance: %.6f\n", raw_var_az);
-    printf("  Std Dev:  %.6f\n", raw_std_az);
-    printf("  Min:      %.6f\n", raw_min_az);
-    printf("  Max:      %.6f\n\n", raw_max_az);
-    
-    printf("--- QUANTIZED Values (Normalized [-1, 1) range) ---\n\n");
-    printf("Accelerometer X (ax):\n");
-    printf("  Mean:     %.6f\n", q_mean_ax);
-    printf("  Median:   %.6f\n", q_med_ax);
-    printf("  Variance: %.6f\n", q_var_ax);
-    printf("  Std Dev:  %.6f\n", q_std_ax);
-    printf("  Min:      %.6f\n", q_min_ax);
-    printf("  Max:      %.6f\n\n", q_max_ax);
-    
-    printf("Accelerometer Y (ay):\n");
-    printf("  Mean:     %.6f\n", q_mean_ay);
-    printf("  Median:   %.6f\n", q_med_ay);
-    printf("  Variance: %.6f\n", q_var_ay);
-    printf("  Std Dev:  %.6f\n", q_std_ay);
-    printf("  Min:      %.6f\n", q_min_ay);
-    printf("  Max:      %.6f\n\n", q_max_ay);
-    
-    printf("Accelerometer Z (az):\n");
-    printf("  Mean:     %.6f\n", q_mean_az);
-    printf("  Median:   %.6f\n", q_med_az);
-    printf("  Variance: %.6f\n", q_var_az);
-    printf("  Std Dev:  %.6f\n", q_std_az);
-    printf("  Min:      %.6f\n", q_min_az);
-    printf("  Max:      %.6f\n\n", q_max_az);
-    
-    printf("Gyroscope X (gx):\n");
-    printf("  Mean:     %.6f  Std Dev: %.6f  Min: %.6f  Max: %.6f\n\n", 
-           q_mean_gx, q_std_gx, q_min_gx, q_max_gx);
-    
-    printf("Gyroscope Y (gy):\n");
-    printf("  Mean:     %.6f  Std Dev: %.6f  Min: %.6f  Max: %.6f\n\n", 
-           q_mean_gy, q_std_gy, q_min_gy, q_max_gy);
-    
-    printf("Gyroscope Z (gz):\n");
-    printf("  Mean:     %.6f  Std Dev: %.6f  Min: %.6f  Max: %.6f\n\n", 
-           q_mean_gz, q_std_gz, q_min_gz, q_max_gz);
-    
-    printf("Magnetometer X (mx):\n");
-    printf("  Mean:     %.6f  Std Dev: %.6f  Min: %.6f  Max: %.6f\n\n", 
-           q_mean_mx, q_std_mx, q_min_mx, q_max_mx);
-    
-    printf("Magnetometer Y (my):\n");
-    printf("  Mean:     %.6f  Std Dev: %.6f  Min: %.6f  Max: %.6f\n\n", 
-           q_mean_my, q_std_my, q_min_my, q_max_my);
-    
-    printf("Magnetometer Z (mz):\n");
-    printf("  Mean:     %.6f  Std Dev: %.6f  Min: %.6f  Max: %.6f\n\n", 
-           q_mean_mz, q_std_mz, q_min_mz, q_max_mz);
+    // Collection Results 
+    printf("=== Collection Results ===\n");
+    float duration_s = (float)(last_timestamp - first_timestamp) / 1e6f;  // Convert µs to seconds
+    float achieved_rate = (sample_count > 1) ? (float)(sample_count - 1) / duration_s : 0.0f;
+    printf("Achieved Sampling Rate: %.2f Hz\n", achieved_rate);
+    printf("Actual Duration: %.3f seconds\n", duration_s);
+    printf("FFT Window Duration: %.3f seconds\n\n", (float)N_FFT / SAMPLE_RATE_HZ);
     
     // Write statistics to file
     char stats_path[PATH_MAX_LEN];
