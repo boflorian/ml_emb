@@ -80,7 +80,7 @@ static bool sd_init_and_mount(void) {
         return false;
     }
 
-    g_drive = sd_get_drive_prefix(g_sd);  // usually "0:"
+    g_drive = sd_get_drive_prefix(g_sd);  
     if (!g_drive) {
         printf("sd_get_drive_prefix() returned NULL\n");
         return false;
@@ -310,8 +310,9 @@ void core1_writer(void) {
     // *_raw: raw int16 sensor values (LSB)
     // *_f32: physical units (ax/ay/az in g, gx/gy/gz in dps, mx/my/mz in µT)
     // *_q15: Q15 quantized values (normalized to [-1,1) then quantized to int16)
+    // *_dq: dequantized values back to normalized [-1,1) range from Q15
     // roll/pitch/yaw: orientation angles in degrees
-    const char *header = "timestamp_us,ax_raw,ay_raw,az_raw,gx_raw,gy_raw,gz_raw,mx_raw,my_raw,mz_raw,ax_f32,ay_f32,az_f32,gx_f32,gy_f32,gz_f32,mx_f32,my_f32,mz_f32,ax_q15,ay_q15,az_q15,gx_q15,gy_q15,gz_q15,mx_q15,my_q15,mz_q15,roll,pitch,yaw\n";
+    const char *header = "timestamp_us,ax_raw,ay_raw,az_raw,gx_raw,gy_raw,gz_raw,mx_raw,my_raw,mz_raw,ax_f32,ay_f32,az_f32,gx_f32,gy_f32,gz_f32,mx_f32,my_f32,mz_f32,ax_q15,ay_q15,az_q15,gx_q15,gy_q15,gz_q15,mx_q15,my_q15,mz_q15,ax_dq,ay_dq,az_dq,gx_dq,gy_dq,gz_dq,mx_dq,my_dq,mz_dq,roll,pitch,yaw\n";
     write_to_file(&file, header, strlen(header), &written);
 
     // Open a secondary file to store spectral peaks
@@ -413,19 +414,26 @@ void core1_writer(void) {
         
         quantize_q15(norm_vals, 9, q15_vals, &clip_count);
         
-        // Write CSV line with all three formats: raw int16, float32, quantized int16
-        char line[512];
+        // Dequantize Q15 back to float for CSV output
+        float dequant_vals[9];
+        dequantize_q15(q15_vals, 9, dequant_vals);
+        
+        // Write CSV line with all formats: raw int16, float32, quantized int16, dequantized float
+        char line[640];
         int len = snprintf(line, sizeof line, 
             "%u,"                                           // timestamp
             "%d,%d,%d,%d,%d,%d,%d,%d,%d,"                  // raw int16 (9 values)
             "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f," // float32 (9 values)
             "%d,%d,%d,%d,%d,%d,%d,%d,%d,"                  // quantized int16 (9 values)
+            "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f," // dequantized float (9 values)
             "%.3f,%.3f,%.3f\n",                            // angles (3 values)
             s.t_us,
             s.ax, s.ay, s.az, s.gx, s.gy, s.gz, s.mx, s.my, s.mz,
             f32_ax, f32_ay, f32_az, f32_gx, f32_gy, f32_gz, f32_mx, f32_my, f32_mz,
             q15_vals[0], q15_vals[1], q15_vals[2], q15_vals[3], q15_vals[4], 
             q15_vals[5], q15_vals[6], q15_vals[7], q15_vals[8],
+            dequant_vals[0], dequant_vals[1], dequant_vals[2], dequant_vals[3], dequant_vals[4],
+            dequant_vals[5], dequant_vals[6], dequant_vals[7], dequant_vals[8],
             s.roll, s.pitch, s.yaw);
         
         if (len > 0 && len < (int)sizeof line) {
@@ -449,10 +457,6 @@ void core1_writer(void) {
         all_roll[sample_count] = s.roll;
         all_pitch[sample_count] = s.pitch;
         all_yaw[sample_count] = s.yaw;
-        
-        // Dequantize Q15 back to float for statistics
-        float dequant_vals[9];
-        dequantize_q15(q15_vals, 9, dequant_vals);
         
         // Store dequantized values for statistics (these are in normalized [-1,1) range)
         all_q_ax[sample_count] = dequant_vals[0];
