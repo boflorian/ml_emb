@@ -29,16 +29,17 @@
 #define MAX_SAMPLES 1000 // limit for data collection
 
 // ICM-20948 sensor normalization constants
-// These convert raw int16 values to normalized [-1, 1) range for Q15 quantization
-// Accelerometer: ±2g range, 16384 LSB/g → normalize by dividing by max expected g (e.g., 2g)
-#define ACCEL_SCALE (1.0f / 16384.0f)  // Converts LSB to g, then divide by max range
-#define ACCEL_RANGE 2.0f                // ±2g, so full range is 4g peak-to-peak
-// Gyroscope: ±250 dps range, 131 LSB/dps → normalize by dividing by max expected dps
-#define GYRO_SCALE (1.0f / 131.0f)     // Converts LSB to dps
-#define GYRO_RANGE 250.0f               // ±250 dps, so full range is 500 dps peak-to-peak
-// Magnetometer: ±4900 µT range, 0.15 µT/LSB
-#define MAG_SCALE 0.15f                 // Converts LSB to µT
-#define MAG_RANGE 4900.0f               // ±4900 µT
+// Step 1: Convert raw int16 to physical units
+#define ACCEL_SCALE (1.0f / 16384.0f)  // Converts LSB to g (±2g range, 16384 LSB/g)
+#define GYRO_SCALE (1.0f / 131.0f)     // Converts LSB to dps (±250 dps range, 131 LSB/dps)
+#define MAG_SCALE 0.15f                 // Converts LSB to µT (±4900 µT range, 0.15 µT/LSB)
+
+// Step 2: Scale physical units to [-1, 1) range for Q15 quantization
+// Use normalization ranges that avoid mathematical cancellation and provide headroom
+// Math check: (1/16384) × 4.0 × 32768 = 8.0 (NOT 1.0, so cancellation avoided!)
+#define ACCEL_RANGE 4.0f                // ±4g normalization (2x sensor range for headroom)
+#define GYRO_RANGE 500.0f               // ±500 dps normalization (2x sensor range for headroom)
+#define MAG_RANGE 10000.0f              // ±10000 µT normalization (2x sensor range for headroom)
 
 
 // --------- Globals (FatFs requires the FS to outlive the mount) ----------
@@ -307,12 +308,13 @@ void core1_writer(void) {
 
     UINT written = 0;
     // CSV Header with units clarification:
-    // *_raw: raw int16 sensor values (LSB)
+    // *_raw: raw int16 sensor values from IMU (LSB, unprocessed)
     // *_f32: physical units (ax/ay/az in g, gx/gy/gz in dps, mx/my/mz in µT)
-    // *_q15: Q15 quantized values (normalized to [-1,1) then quantized to int16)
-    // *_dq: dequantized values back to normalized [-1,1) range from Q15
+    // *_norm: normalized values in [-1,1) range (physical units / sensor range)
+    // *_q15: Q15 quantized int16 values (norm * 32768, using full int16 range for [-1,1))
+    // *_dq: dequantized float values back to [-1,1) normalized range (q15 / 32768)
     // roll/pitch/yaw: orientation angles in degrees
-    const char *header = "timestamp_us,ax_raw,ay_raw,az_raw,gx_raw,gy_raw,gz_raw,mx_raw,my_raw,mz_raw,ax_f32,ay_f32,az_f32,gx_f32,gy_f32,gz_f32,mx_f32,my_f32,mz_f32,ax_q15,ay_q15,az_q15,gx_q15,gy_q15,gz_q15,mx_q15,my_q15,mz_q15,ax_dq,ay_dq,az_dq,gx_dq,gy_dq,gz_dq,mx_dq,my_dq,mz_dq,roll,pitch,yaw\n";
+    const char *header = "timestamp_us,ax_raw,ay_raw,az_raw,gx_raw,gy_raw,gz_raw,mx_raw,my_raw,mz_raw,ax_f32,ay_f32,az_f32,gx_f32,gy_f32,gz_f32,mx_f32,my_f32,mz_f32,ax_norm,ay_norm,az_norm,gx_norm,gy_norm,gz_norm,mx_norm,my_norm,mz_norm,ax_q15,ay_q15,az_q15,gx_q15,gy_q15,gz_q15,mx_q15,my_q15,mz_q15,ax_dq,ay_dq,az_dq,gx_dq,gy_dq,gz_dq,mx_dq,my_dq,mz_dq,roll,pitch,yaw\n";
     write_to_file(&file, header, strlen(header), &written);
 
     // Open a secondary file to store spectral peaks
@@ -418,18 +420,20 @@ void core1_writer(void) {
         float dequant_vals[9];
         dequantize_q15(q15_vals, 9, dequant_vals);
         
-        // Write CSV line with all formats: raw int16, float32, quantized int16, dequantized float
-        char line[640];
+        // Write CSV line with all formats: raw int16, float32, normalized float, quantized int16, dequantized float
+        char line[768];
         int len = snprintf(line, sizeof line, 
             "%u,"                                           // timestamp
             "%d,%d,%d,%d,%d,%d,%d,%d,%d,"                  // raw int16 (9 values)
-            "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f," // float32 (9 values)
-            "%d,%d,%d,%d,%d,%d,%d,%d,%d,"                  // quantized int16 (9 values)
-            "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f," // dequantized float (9 values)
+            "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f," // float32 physical units (9 values)
+            "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f," // normalized float [-1,1) (9 values)
+            "%d,%d,%d,%d,%d,%d,%d,%d,%d,"                  // Q15 quantized int16 (9 values)
+            "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f," // dequantized float [-1,1) (9 values)
             "%.3f,%.3f,%.3f\n",                            // angles (3 values)
             s.t_us,
             s.ax, s.ay, s.az, s.gx, s.gy, s.gz, s.mx, s.my, s.mz,
             f32_ax, f32_ay, f32_az, f32_gx, f32_gy, f32_gz, f32_mx, f32_my, f32_mz,
+            norm_ax, norm_ay, norm_az, norm_gx, norm_gy, norm_gz, norm_mx, norm_my, norm_mz,
             q15_vals[0], q15_vals[1], q15_vals[2], q15_vals[3], q15_vals[4], 
             q15_vals[5], q15_vals[6], q15_vals[7], q15_vals[8],
             dequant_vals[0], dequant_vals[1], dequant_vals[2], dequant_vals[3], dequant_vals[4],
