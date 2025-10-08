@@ -24,7 +24,7 @@
 // ============================================================================
 // CONFIGURATION SETTINGS - Adjust these to change system behavior
 // ============================================================================
-#define SAMPLE_RATE_HZ 100      // Desired sampling rate in Hz (must be integer)
+#define SAMPLE_RATE_HZ 200      // Desired sampling rate in Hz (must be integer)
                                  // Common values: 50, 100, 200
                                  // Sleep time = 1000 / SAMPLE_RATE_HZ milliseconds
 #define MAX_SAMPLES 1000        // Maximum number of samples to collect before stopping
@@ -238,7 +238,6 @@ typedef struct {
     int16_t ax, ay, az;
     int16_t gx, gy, gz;
     int16_t mx, my, mz;
-    float roll, pitch, yaw;
     uint32_t t_us;
 } Sample;
 
@@ -257,8 +256,7 @@ static void core0_sampler(void)
     while ((time_us_32() - settle_start) < 5000000) {  // 5 seconds in microseconds
         // Read and discard samples during settling period
         IMU_ST_SENSOR_DATA stGyroRawData, stAccelRawData, stMagnRawData;
-        IMU_ST_ANGLES_DATA stAngles;
-        imuDataGet(&stAngles, &stGyroRawData, &stAccelRawData, &stMagnRawData);
+        imuDataGet(NULL, &stGyroRawData, &stAccelRawData, &stMagnRawData);
         sleep_ms(10);
     }
     
@@ -269,16 +267,14 @@ static void core0_sampler(void)
     const uint32_t sleep_ms_val = 1000 / SAMPLE_RATE_HZ;
     printf("Sampling period: %u ms\n", sleep_ms_val);
     
-    uint32_t t_prev = (uint32_t)time_us_64();
     while (1) {
         IMU_ST_SENSOR_DATA stGyroRawData, stAccelRawData, stMagnRawData;
-        IMU_ST_ANGLES_DATA stAngles;
-        imuDataGet(&stAngles, &stGyroRawData, &stAccelRawData, &stMagnRawData);
+        // Read only raw sensor data (no angle calculations for speed)
+        imuDataGet(NULL, &stGyroRawData, &stAccelRawData, &stMagnRawData);
         uint32_t t_now = (uint32_t)time_us_64();
         Sample s = { stAccelRawData.s16X, stAccelRawData.s16Y, stAccelRawData.s16Z,
                       stGyroRawData.s16X, stGyroRawData.s16Y, stGyroRawData.s16Z,
                       stMagnRawData.s16X, stMagnRawData.s16Y, stMagnRawData.s16Z,
-                      stAngles.fRoll, stAngles.fPitch, stAngles.fYaw,
                       t_now };
         queue_add_blocking(&sample_q, &s);
         sleep_ms(sleep_ms_val);
@@ -328,8 +324,7 @@ void core1_writer(void) {
     // *_norm: normalized values in [-1,1) range (physical units / sensor range)
     // *_q15: Q15 quantized int16 values (norm * 32768, using full int16 range for [-1,1))
     // *_dq: dequantized float values back to [-1,1) normalized range (q15 / 32768)
-    // roll/pitch/yaw: orientation angles in degrees
-    const char *header = "timestamp_us,ax_raw,ay_raw,az_raw,gx_raw,gy_raw,gz_raw,mx_raw,my_raw,mz_raw,ax_f32,ay_f32,az_f32,gx_f32,gy_f32,gz_f32,mx_f32,my_f32,mz_f32,ax_norm,ay_norm,az_norm,gx_norm,gy_norm,gz_norm,mx_norm,my_norm,mz_norm,ax_q15,ay_q15,az_q15,gx_q15,gy_q15,gz_q15,mx_q15,my_q15,mz_q15,ax_dq,ay_dq,az_dq,gx_dq,gy_dq,gz_dq,mx_dq,my_dq,mz_dq,roll,pitch,yaw\n";
+    const char *header = "timestamp_us,ax_raw,ay_raw,az_raw,gx_raw,gy_raw,gz_raw,mx_raw,my_raw,mz_raw,ax_f32,ay_f32,az_f32,gx_f32,gy_f32,gz_f32,mx_f32,my_f32,mz_f32,ax_norm,ay_norm,az_norm,gx_norm,gy_norm,gz_norm,mx_norm,my_norm,mz_norm,ax_q15,ay_q15,az_q15,gx_q15,gy_q15,gz_q15,mx_q15,my_q15,mz_q15,ax_dq,ay_dq,az_dq,gx_dq,gy_dq,gz_dq,mx_dq,my_dq,mz_dq\n";
     write_to_file(&file, header, strlen(header), &written);
 
     // Open a secondary file to store spectral peaks
@@ -373,15 +368,10 @@ void core1_writer(void) {
     float *all_q_mx = (float*)malloc(MAX_SAMPLES * sizeof(float));
     float *all_q_my = (float*)malloc(MAX_SAMPLES * sizeof(float));
     float *all_q_mz = (float*)malloc(MAX_SAMPLES * sizeof(float));
-    // Angles
-    float *all_roll = (float*)malloc(MAX_SAMPLES * sizeof(float));
-    float *all_pitch = (float*)malloc(MAX_SAMPLES * sizeof(float));
-    float *all_yaw = (float*)malloc(MAX_SAMPLES * sizeof(float));
     
     if (!all_raw_ax || !all_raw_ay || !all_raw_az || !all_q_ax || !all_q_ay || !all_q_az ||
         !all_raw_gx || !all_raw_gy || !all_raw_gz || !all_q_gx || !all_q_gy || !all_q_gz ||
-        !all_raw_mx || !all_raw_my || !all_raw_mz || !all_q_mx || !all_q_my || !all_q_mz ||
-        !all_roll || !all_pitch || !all_yaw) {
+        !all_raw_mx || !all_raw_my || !all_raw_mz || !all_q_mx || !all_q_my || !all_q_mz) {
         printf("Failed to allocate memory for statistics\n");
         f_close(&file);
         if (fr2 == FR_OK) f_close(&spec_file);
@@ -453,8 +443,7 @@ void core1_writer(void) {
             "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f," // float32 physical units (9 values)
             "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f," // normalized float [-1,1) (9 values)
             "%d,%d,%d,%d,%d,%d,%d,%d,%d,"                  // Q15 quantized int16 (9 values)
-            "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f," // dequantized float [-1,1) (9 values)
-            "%.3f,%.3f,%.3f\n",                            // angles (3 values)
+            "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f\n", // dequantized float [-1,1) (9 values)
             s.t_us,
             s.ax, s.ay, s.az, s.gx, s.gy, s.gz, s.mx, s.my, s.mz,
             f32_ax, f32_ay, f32_az, f32_gx, f32_gy, f32_gz, f32_mx, f32_my, f32_mz,
@@ -462,8 +451,7 @@ void core1_writer(void) {
             q15_vals[0], q15_vals[1], q15_vals[2], q15_vals[3], q15_vals[4], 
             q15_vals[5], q15_vals[6], q15_vals[7], q15_vals[8],
             dequant_vals[0], dequant_vals[1], dequant_vals[2], dequant_vals[3], dequant_vals[4],
-            dequant_vals[5], dequant_vals[6], dequant_vals[7], dequant_vals[8],
-            s.roll, s.pitch, s.yaw);
+            dequant_vals[5], dequant_vals[6], dequant_vals[7], dequant_vals[8]);
         
         if (len > 0 && len < (int)sizeof line) {
             fr = write_to_file(&file, line, (UINT)len, &written);
@@ -483,9 +471,6 @@ void core1_writer(void) {
         all_raw_mx[sample_count] = f32_mx;
         all_raw_my[sample_count] = f32_my;
         all_raw_mz[sample_count] = f32_mz;
-        all_roll[sample_count] = s.roll;
-        all_pitch[sample_count] = s.pitch;
-        all_yaw[sample_count] = s.yaw;
         
         // Store dequantized values for statistics (these are in normalized [-1,1) range)
         all_q_ax[sample_count] = dequant_vals[0];
@@ -609,18 +594,6 @@ void core1_writer(void) {
     min_max_f32(all_raw_mx, sample_count, &raw_min_mx, &raw_max_mx);
     min_max_f32(all_raw_my, sample_count, &raw_min_my, &raw_max_my);
     min_max_f32(all_raw_mz, sample_count, &raw_min_mz, &raw_max_mz);
-    
-    // Angles statistics
-    float mean_roll = mean_f32(all_roll, sample_count);
-    float mean_pitch = mean_f32(all_pitch, sample_count);
-    float mean_yaw = mean_f32(all_yaw, sample_count);
-    float std_roll = stddev_f32(variance_f32(all_roll, sample_count, mean_roll));
-    float std_pitch = stddev_f32(variance_f32(all_pitch, sample_count, mean_pitch));
-    float std_yaw = stddev_f32(variance_f32(all_yaw, sample_count, mean_yaw));
-    float min_roll, max_roll, min_pitch, max_pitch, min_yaw, max_yaw;
-    min_max_f32(all_roll, sample_count, &min_roll, &max_roll);
-    min_max_f32(all_pitch, sample_count, &min_pitch, &max_pitch);
-    min_max_f32(all_yaw, sample_count, &min_yaw, &max_yaw);
     
     // Calculate statistics from QUANTIZED values
     float q_mean_ax = mean_f32(all_q_ax, sample_count);
@@ -889,18 +862,32 @@ void core1_writer(void) {
             "========================================\n");
         write_to_file(&stats_file, stats_buf, len, &bw);
         
-        len = snprintf(stats_buf, sizeof stats_buf, 
-            "Total samples: %u\n\n", sample_count);
+        // Write configuration settings
+        len = snprintf(stats_buf, sizeof stats_buf,
+            "\n--- Configuration Settings ---\n"
+            "Configured Sampling Rate: %u Hz\n"
+            "Max Samples: %u\n"
+            "FFT Window Size: %u samples\n"
+            "FFT Peaks Extracted: %u per axis\n"
+            "Normalization Ranges:\n"
+            "  - Accelerometer: ±%.1f g\n"
+            "  - Gyroscope: ±%.1f dps\n"
+            "  - Magnetometer: ±%.1f µT\n\n",
+            SAMPLE_RATE_HZ, MAX_SAMPLES, N_FFT, FFT_PEAKS,
+            ACCEL_RANGE, GYRO_RANGE, MAG_RANGE);
         write_to_file(&stats_file, stats_buf, len, &bw);
-
-        // Sampling Rate 
+        
+        // Write actual collection results
         float duration_s = (float)(last_timestamp - first_timestamp) / 1e6f;  // Convert µs to seconds
         float achieved_rate = (sample_count > 1) ? (float)(sample_count - 1) / duration_s : 0.0f;
-        len = snprintf(stats_buf, sizeof stats_buf,
-            "Configured Sampling Rate: %u Hz\n"
+        len = snprintf(stats_buf, sizeof stats_buf, 
+            "--- Collection Results ---\n"
+            "Total Samples Collected: %u\n"
             "Achieved Sampling Rate: %.2f Hz\n"
-            "Duration: %.3f seconds\n\n",
-            SAMPLE_RATE_HZ, achieved_rate, duration_s);
+            "Actual Duration: %.3f seconds\n"
+            "FFT Window Duration: %.3f seconds\n\n",
+            sample_count, achieved_rate, duration_s, (float)N_FFT / SAMPLE_RATE_HZ);
+        write_to_file(&stats_file, stats_buf, len, &bw);
         
         // Write RAW statistics
         len = snprintf(stats_buf, sizeof stats_buf,
@@ -963,16 +950,6 @@ void core1_writer(void) {
             raw_mean_mx, raw_std_mx, raw_min_mx, raw_max_mx,
             raw_mean_my, raw_std_my, raw_min_my, raw_max_my,
             raw_mean_mz, raw_std_mz, raw_min_mz, raw_max_mz);
-        write_to_file(&stats_file, stats_buf, len, &bw);
-        
-        len = snprintf(stats_buf, sizeof stats_buf,
-            "Orientation Angles:\n"
-            "  Roll:  Mean=%.3f° Std=%.3f° Min=%.3f° Max=%.3f°\n"
-            "  Pitch: Mean=%.3f° Std=%.3f° Min=%.3f° Max=%.3f°\n"
-            "  Yaw:   Mean=%.3f° Std=%.3f° Min=%.3f° Max=%.3f°\n\n",
-            mean_roll, std_roll, min_roll, max_roll,
-            mean_pitch, std_pitch, min_pitch, max_pitch,
-            mean_yaw, std_yaw, min_yaw, max_yaw);
         write_to_file(&stats_file, stats_buf, len, &bw);
         
         // Write QUANTIZED statistics
@@ -1096,9 +1073,6 @@ void core1_writer(void) {
     free(all_q_mx);
     free(all_q_my);
     free(all_q_mz);
-    free(all_roll);
-    free(all_pitch);
-    free(all_yaw);
 
     f_close(&file);
     if (fr2 == FR_OK) f_close(&spec_file);
@@ -1108,7 +1082,7 @@ void core1_writer(void) {
 
 int main(void) {
     stdio_init_all();         // only here
-    sleep_ms(3000);           // optional USB settle time
+    sleep_ms(3000);           
     
     printf("\n========================================\n");
     printf("IMU Data Logger - Starting Up\n");
