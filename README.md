@@ -5,6 +5,10 @@ Repository for Project in *Machine Learning for Embedded Systems* Course at **Ta
 
 To run IMU Data Collection on Raspberry Pi Pico compile imu_data_logger/main.cpp
 
+```
+mkdir build && cd build && cmake .. && build 
+```
+
 Settings for Sampling Rate and Duration are at the top. 
 
 Currently outputs: 
