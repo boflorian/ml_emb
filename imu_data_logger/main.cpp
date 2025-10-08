@@ -24,19 +24,29 @@
 // ============================================================================
 // CONFIGURATION SETTINGS - Adjust these to change system behavior
 // ============================================================================
-#define SAMPLE_RATE_HZ 200      // Desired sampling rate in Hz (must be integer)
+#define SAMPLE_RATE_HZ 100      // Desired sampling rate in Hz (must be integer)
                                  // Common values: 50, 100, 200
-                                 // Sleep time = 1000 / SAMPLE_RATE_HZ milliseconds
-#define MAX_SAMPLES 1000        // Maximum number of samples to collect before stopping
-                                 // Total duration = MAX_SAMPLES / SAMPLE_RATE_HZ seconds
-                                 // Example: 1000 samples @ 100 Hz = 10 seconds
+
+// Target 5 seconds of data collection across all sample rates
+// MAX_SAMPLES automatically scales with sample rate for consistent duration
+#define COLLECTION_DURATION_S 20 // Collection duration in seconds
+#define MAX_SAMPLES (SAMPLE_RATE_HZ * COLLECTION_DURATION_S)
+                                 // At 50 Hz: 250 samples = 5.0s
+                                 // At 100 Hz: 500 samples = 5.0s
+                                 // At 200 Hz: 1000 samples = 5.0s
 
 // ============================================================================
 // System Constants (usually don't need to change these)
 // ============================================================================
 #define PATH_MAX_LEN 256
 #define QUEUE_DEPTH 1024
-#define N_FFT 256               // FFT window size (must be power of 2)
+#define N_FFT 128               // FFT window size (must be power of 2)
+                                 // Reduced from 256 to 128 for shorter collection time
+                                 // FFT computed every N_FFT samples
+                                 // Frequency resolution = SAMPLE_RATE_HZ / N_FFT
+                                 // At 50 Hz: 0.39 Hz/bin, 2.56s window → 1-2 FFTs
+                                 // At 100 Hz: 0.78 Hz/bin, 1.28s window → 3-4 FFTs
+                                 // At 200 Hz: 1.56 Hz/bin, 0.64s window → 7-8 FFTs
 #define FFT_PEAKS 3             // Number of spectral peaks to extract per axis
 
 // ICM-20948 sensor normalization constants
@@ -264,9 +274,12 @@ static void core0_sampler(void)
     imu_ready = true;
     printf("IMU ready, starting data collection at %d Hz.\n", SAMPLE_RATE_HZ);
     
-    // Calculate sleep time in milliseconds from sample rate
-    const uint32_t sleep_ms_val = 1000 / SAMPLE_RATE_HZ;
-    printf("Sampling period: %u ms\n", sleep_ms_val);
+    // Calculate sample period in microseconds for precise timing
+    const uint32_t sample_period_us = 1000000 / SAMPLE_RATE_HZ;
+    printf("Sampling period: %u us (%.3f ms)\n", sample_period_us, sample_period_us / 1000.0f);
+    
+    // Initialize timing - schedule first sample immediately
+    uint32_t next_sample_time = time_us_32();
     
     while (1) {
         int16_t ax, ay, az, gx, gy, gz, mx, my, mz;
@@ -282,7 +295,16 @@ static void core0_sampler(void)
         
         Sample s = { ax, ay, az, gx, gy, gz, mx, my, mz, t_now };
         queue_add_blocking(&sample_q, &s);
-        sleep_ms(sleep_ms_val);
+        
+        // Calculate next sample time (compensates for processing time!)
+        next_sample_time += sample_period_us;
+        
+        // Sleep until next sample time
+        int32_t sleep_time_us = (int32_t)(next_sample_time - time_us_32());
+        if (sleep_time_us > 100) {  // Only sleep if we have >100us to spare
+            sleep_us(sleep_time_us);
+        }
+        // If sleep_time_us <= 0, running behind - skip sleep and continue immediately
     }
 }
 
@@ -706,49 +728,34 @@ void core1_writer(void) {
         printf("Comparing normalized raw vs quantized values\n\n");
         
         printf("Accelerometer X (ax):\n");
-        printf("  SNR:         %.2f dB\n", snr_ax);
-        printf("  Max Error:   %.6f\n", max_err_ax);
-        printf("  RMS Error:   %.6f\n\n", rms_err_ax);
+        printf("  SNR:         %.2f dB", snr_ax);
+        printf("  Max Error:   %.6f", max_err_ax);
+        printf("  RMS Error:   %.6f\n", rms_err_ax);
         
-        printf("Accelerometer Y (ay):\n");
-        printf("  SNR:         %.2f dB\n", snr_ay);
-        printf("  Max Error:   %.6f\n", max_err_ay);
-        printf("  RMS Error:   %.6f\n\n", rms_err_ay);
+        printf("Accelerometer Y (ay):");
+        printf("  SNR:         %.2f dB", snr_ay);
+        printf("  Max Error:   %.6f", max_err_ay);
+        printf("  RMS Error:   %.6f\n", rms_err_ay);
         
-        printf("Accelerometer Z (az):\n");
-        printf("  SNR:         %.2f dB\n", snr_az);
-        printf("  Max Error:   %.6f\n", max_err_az);
-        printf("  RMS Error:   %.6f\n\n", rms_err_az);
+        printf("Accelerometer Z (az):");
+        printf("  SNR:         %.2f dB", snr_az);
+        printf("  Max Error:   %.6f", max_err_az);
+        printf("  RMS Error:   %.6f\n", rms_err_az);
         
-        printf("Gyroscope X (gx):\n");
-        printf("  SNR:         %.2f dB\n", snr_gx);
-        printf("  Max Error:   %.6f\n", max_err_gx);
-        printf("  RMS Error:   %.6f\n\n", rms_err_gx);
+        printf("Gyroscope X (gx):");
+        printf("  SNR:         %.2f dB", snr_gx);
+        printf("  Max Error:   %.6f", max_err_gx);
+        printf("  RMS Error:   %.6f\n", rms_err_gx);
         
-        printf("Gyroscope Y (gy):\n");
-        printf("  SNR:         %.2f dB\n", snr_gy);
-        printf("  Max Error:   %.6f\n", max_err_gy);
-        printf("  RMS Error:   %.6f\n\n", rms_err_gy);
+        printf("Gyroscope Y (gy):");
+        printf("  SNR:         %.2f dB", snr_gy);
+        printf("  Max Error:   %.6f", max_err_gy);
+        printf("  RMS Error:   %.6f\n", rms_err_gy);
         
-        printf("Gyroscope Z (gz):\n");
-        printf("  SNR:         %.2f dB\n", snr_gz);
-        printf("  Max Error:   %.6f\n", max_err_gz);
-        printf("  RMS Error:   %.6f\n\n", rms_err_gz);
-        
-        printf("Magnetometer X (mx):\n");
-        printf("  SNR:         %.2f dB\n", snr_mx);
-        printf("  Max Error:   %.6f\n", max_err_mx);
-        printf("  RMS Error:   %.6f\n\n", rms_err_mx);
-        
-        printf("Magnetometer Y (my):\n");
-        printf("  SNR:         %.2f dB\n", snr_my);
-        printf("  Max Error:   %.6f\n", max_err_my);
-        printf("  RMS Error:   %.6f\n\n", rms_err_my);
-        
-        printf("Magnetometer Z (mz):\n");
-        printf("  SNR:         %.2f dB\n", snr_mz);
-        printf("  Max Error:   %.6f\n", max_err_mz);
-        printf("  RMS Error:   %.6f\n\n", rms_err_mz);
+        printf("Gyroscope Z (gz):");
+        printf("  SNR:         %.2f dB", snr_gz);
+        printf("  Max Error:   %.6f", max_err_gz);
+        printf("  RMS Error:   %.6f\n", rms_err_gz);
         
         // Free normalized arrays (we'll save SNR values for file writing)
         free(norm_raw_ax);

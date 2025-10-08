@@ -101,6 +101,3 @@ void top_k_peaks(const float* mag, int n_half, int k_exclude_dc, int K,
     }
     *out_count = count;
 }
-
-/* Demo/test main omitted here; see fft_demo.c in the same directory for a
- * standalone fft test program */
