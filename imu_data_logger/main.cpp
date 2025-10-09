@@ -704,7 +704,8 @@ void core1_writer(void) {
         
         snr_computed = true;
         
-        // Print SNR and error analysis
+        // Print SNR and error analysis to console 
+        /*
         printf("\n========================================\n");
         printf("=== Quantization Quality Analysis ===\n");
         printf("========================================\n");
@@ -739,6 +740,7 @@ void core1_writer(void) {
         printf("  SNR:         %.2f dB", snr_gz);
         printf("  Max Error:   %.6f", max_err_gz);
         printf("  RMS Error:   %.6f\n", rms_err_gz);
+        */
         
         // Free normalized arrays (we'll save SNR values for file writing)
         free(norm_raw_ax);
