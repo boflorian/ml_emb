@@ -22,51 +22,38 @@
 
 
 // ============================================================================
-// CONFIGURATION SETTINGS - Adjust these to change system behavior
+// CONFIGURATION SETTINGS 
 // ============================================================================
-#define SAMPLE_RATE_HZ 100      // Desired sampling rate in Hz (must be integer)
-                                 // Common values: 50, 100, 200
-
-// Target 5 seconds of data collection across all sample rates
+#define SAMPLE_RATE_HZ 100      
 // MAX_SAMPLES automatically scales with sample rate for consistent duration
-#define COLLECTION_DURATION_S 20 // Collection duration in seconds
+#define COLLECTION_DURATION_S 10 
 #define MAX_SAMPLES (SAMPLE_RATE_HZ * COLLECTION_DURATION_S)
-                                 // At 50 Hz: 250 samples = 5.0s
-                                 // At 100 Hz: 500 samples = 5.0s
-                                 // At 200 Hz: 1000 samples = 5.0s
+                                 
 
 // ============================================================================
-// System Constants (usually don't need to change these)
+// System Constants 
 // ============================================================================
 #define PATH_MAX_LEN 256
 #define QUEUE_DEPTH 1024
 #define N_FFT 128               // FFT window size (must be power of 2)
-                                 // Reduced from 256 to 128 for shorter collection time
-                                 // FFT computed every N_FFT samples
-                                 // Frequency resolution = SAMPLE_RATE_HZ / N_FFT
-                                 // At 50 Hz: 0.39 Hz/bin, 2.56s window → 1-2 FFTs
-                                 // At 100 Hz: 0.78 Hz/bin, 1.28s window → 3-4 FFTs
-                                 // At 200 Hz: 1.56 Hz/bin, 0.64s window → 7-8 FFTs
-#define FFT_PEAKS 3             // Number of spectral peaks to extract per axis
+                                  
+#define FFT_PEAKS 3            
 
 // ICM-20948 sensor normalization constants
-// Step 1: Convert raw int16 to physical units
-#define ACCEL_SCALE (1.0f / 16384.0f)  // Converts LSB to g (±2g range, 16384 LSB/g)
-#define GYRO_SCALE (1.0f / 131.0f)     // Converts LSB to dps (±250 dps range, 131 LSB/dps)
-#define MAG_SCALE 0.15f                 // Converts LSB to µT (±4900 µT range, 0.15 µT/LSB)
-
-// Step 2: Scale physical units to [-1, 1) range for Q15 quantization
-// Use normalization ranges that avoid mathematical cancellation and provide headroom
-// Math check: (1/16384) × 4.0 × 32768 = 8.0 (NOT 1.0, so cancellation avoided!)
-#define ACCEL_RANGE 4.0f                // ±4g normalization (2x sensor range for headroom)
-#define GYRO_RANGE 500.0f               // ±500 dps normalization (2x sensor range for headroom)
-#define MAG_RANGE 10000.0f              // ±10000 µT normalization (2x sensor range for headroom)
+#define ACCEL_SCALE (1.0f / 16384.0f)  
+#define GYRO_SCALE (1.0f / 131.0f)     
+#define MAG_SCALE 0.15f                
 
 
-// --------- Globals (FatFs requires the FS to outlive the mount) ----------
-static FATFS fs;                 // must be static/global (lives as long as the mount)
-static sd_card_t *g_sd = NULL;   // active SD card
-static const char *g_drive = NULL; // typically "0:"
+#define ACCEL_RANGE 4.0f                
+#define GYRO_RANGE 500.0f               
+#define MAG_RANGE 10000.0f              
+
+
+
+static FATFS fs;                
+static sd_card_t *g_sd = NULL;   
+static const char *g_drive = NULL; 
 
 // ------------------------- Utility / Error -------------------------------
 static void die(FRESULT fr, const char *op) {
@@ -80,7 +67,6 @@ static void loop_forever_msg(const char *msg) {
 }
 
 static void join_path(char *out, size_t out_sz, const char *drive, const char *rel) {
-    // drive = "0:" or "0:/", ensure exactly one slash when joining
     if (rel && rel[0] == '/') rel++; // avoid double slashes
     if (drive && drive[strlen(drive) - 1] == '/')
         snprintf(out, out_sz, "%s%s", drive, rel ? rel : "");
@@ -135,8 +121,6 @@ static FRESULT create_file(const char *abs_path, FIL *out_file) {
     // Creates/truncates a file and opens it for writing
     printf("Creating file: %s\n", abs_path);
     return f_open(out_file, abs_path, FA_WRITE | FA_CREATE_ALWAYS);
-
-    //return f_open(out_file, abs_path, FA_WRITE | FA_OPEN_ALWAYS);
 }
 
 // ------------------------- 3) File writing -------------------------------
@@ -202,7 +186,7 @@ static FRESULT list_dir_recursive(const char *path, list_stats_t *stats) {
 static FRESULT check_and_list_files(const char *root_drive) {
     // Build root path "0:/"
     char root[PATH_MAX_LEN];
-    join_path(root, sizeof root, root_drive, ""); // ensures a trailing slash when we add children
+    join_path(root, sizeof root, root_drive, ""); 
 
     list_stats_t stats = {0};
     printf("\n--- SD Card File Listing for '%s' ---\n", root_drive);
@@ -264,7 +248,6 @@ static void core0_sampler(void)
     printf("Waiting for IMU to settle (5 seconds)...\n");
     uint32_t settle_start = time_us_32();
     while ((time_us_32() - settle_start) < 5000000) {  // 5 seconds in microseconds
-        // Read and discard samples during settling period (direct fast burst reads)
         int16_t ax, ay, az, gx, gy, gz;
         icm20948AccelFastRead(&ax, &ay, &az);
         icm20948GyroFastRead(&gx, &gy, &gz);
@@ -284,7 +267,6 @@ static void core0_sampler(void)
     while (1) {
         int16_t ax, ay, az, gx, gy, gz, mx, my, mz;
         
-        // Direct fast burst read calls 
         icm20948AccelFastRead(&ax, &ay, &az);
         icm20948GyroFastRead(&gx, &gy, &gz);
         
@@ -296,7 +278,6 @@ static void core0_sampler(void)
         Sample s = { ax, ay, az, gx, gy, gz, mx, my, mz, t_now };
         queue_add_blocking(&sample_q, &s);
         
-        // Calculate next sample time (compensates for processing time!)
         next_sample_time += sample_period_us;
         
         // Sleep until next sample time
@@ -354,7 +335,7 @@ void core1_writer(void) {
     const char *header = "timestamp_us,ax_raw,ay_raw,az_raw,gx_raw,gy_raw,gz_raw,mx_raw,my_raw,mz_raw,ax_f32,ay_f32,az_f32,gx_f32,gy_f32,gz_f32,mx_f32,my_f32,mz_f32,ax_norm,ay_norm,az_norm,gx_norm,gy_norm,gz_norm,mx_norm,my_norm,mz_norm,ax_q15,ay_q15,az_q15,gx_q15,gy_q15,gz_q15,mx_q15,my_q15,mz_q15,ax_dq,ay_dq,az_dq,gx_dq,gy_dq,gz_dq,mx_dq,my_dq,mz_dq\n";
     write_to_file(&file, header, strlen(header), &written);
 
-    // Open a secondary file to store spectral peaks
+    // Open a second file to store spectral peaks
     char spectrum_path[PATH_MAX_LEN];
     join_path(spectrum_path, sizeof spectrum_path, g_drive, "imu_spectra.csv");
     FIL spec_file;
@@ -389,6 +370,8 @@ void core1_writer(void) {
     float *all_q_gy = (float*)malloc(MAX_SAMPLES * sizeof(float));
     float *all_q_gz = (float*)malloc(MAX_SAMPLES * sizeof(float));
     // Magnetometer
+    // not being used right now but I think its better to leave this in case of change
+    // should not use too much 
     float *all_raw_mx = (float*)malloc(MAX_SAMPLES * sizeof(float));
     float *all_raw_my = (float*)malloc(MAX_SAMPLES * sizeof(float));
     float *all_raw_mz = (float*)malloc(MAX_SAMPLES * sizeof(float));
