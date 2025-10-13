@@ -35,7 +35,7 @@
 // ============================================================================
 #define PATH_MAX_LEN 256
 #define QUEUE_DEPTH 1024
-#define N_FFT 128               // FFT window size (must be power of 2)
+#define N_FFT 128 // FFT window size (must be power of 2)
                                   
 #define FFT_PEAKS 3            
 
@@ -44,12 +44,9 @@
 #define GYRO_SCALE (1.0f / 131.0f)     
 #define MAG_SCALE 0.15f                
 
-
 #define ACCEL_RANGE 4.0f                
 #define GYRO_RANGE 500.0f               
 #define MAG_RANGE 10000.0f              
-
-
 
 static FATFS fs;                
 static sd_card_t *g_sd = NULL;   
@@ -209,9 +206,7 @@ static FRESULT check_and_list_files(const char *root_drive) {
     return FR_OK;
 }
 
-
 // Debug 
-
 void check_sd_ready(void) {
     FATFS *fs_ptr;
     DWORD free_clusters;
@@ -236,7 +231,7 @@ typedef struct {
 } Sample;
 
 static queue_t sample_q;
-static volatile bool imu_ready = false;  // Synchronization flag
+static volatile bool imu_ready = false; // Synchronization flag
 
 static void core0_sampler(void)
 {
@@ -247,7 +242,7 @@ static void core0_sampler(void)
     // Settling avoids wrong data in world z direction (gravity)
     printf("Waiting for IMU to settle (5 seconds)...\n");
     uint32_t settle_start = time_us_32();
-    while ((time_us_32() - settle_start) < 5000000) {  // 5 seconds in microseconds
+    while ((time_us_32() - settle_start) < 5000000) { // 5 seconds in microseconds
         int16_t ax, ay, az, gx, gy, gz;
         icm20948AccelFastRead(&ax, &ay, &az);
         icm20948GyroFastRead(&gx, &gy, &gz);
