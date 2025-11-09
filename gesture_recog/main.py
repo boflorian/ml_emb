@@ -18,9 +18,31 @@ from nn_def import build_imu_model
 
 SUBJECTS = list(range(8))  
 CONFIG = dict(
-        win=128, hop=64, lp_window=7, batch_size=64, epochs=20,
-        num_classes=4, lr=1e-3, l2=1e-4, dropout=0.5
+        win=256, hop=64, lp_window=7, batch_size=64, epochs=50,
+        num_classes=4, lr=1e-3, l2=1e-2, dropout=0.5
     )
+
+
+
+def find_best_model(models_root="models"):
+    """Scan all previous runs and find the one with highest mean val accuracy."""
+    best = None
+    best_path = None
+
+    for sub in Path(models_root).glob("*_cv"):
+        summ = sub / "summary.json"
+        if summ.exists():
+            try:
+                data = json.loads(summ.read_text())
+                acc = data.get("mean_val_accuracy")
+                loss = data.get("mean_val_loss", None)
+                if acc is not None:
+                    if (best is None) or (acc > best["acc"]):
+                        best = {"acc": acc, "loss": loss, "path": sub}
+                        best_path = sub
+            except Exception:
+                continue
+    return best
 
 
 def plot_training_curves(history, save_path):
@@ -36,6 +58,7 @@ def plot_training_curves(history, save_path):
     if "val_loss" in hist: plt.plot(epochs, hist["val_loss"], label="Val Loss")
     plt.title("Loss"); plt.xlabel("Epoch"); plt.ylabel("Loss"); plt.legend()
     plt.tight_layout(); plt.savefig(save_path); plt.close()
+
 
 def plot_crossval_results(run_root):
     """Aggregate all fold histories under run_root and plot mean ± std accuracy/loss."""
@@ -164,9 +187,17 @@ def run_one_fold(run_root, val_subject, cfg):
     )
     csv_cb = tf.keras.callbacks.CSVLogger(str(fold_dir / "history.csv"))
     tb_cb  = tf.keras.callbacks.TensorBoard(log_dir=str(fold_dir / "tb"), write_graph=False)
+    
+
+    # Early Stopping 
     early_cb = tf.keras.callbacks.EarlyStopping(
-        monitor="val_accuracy", mode="max", patience=8, restore_best_weights=True
+        monitor="val_accuracy",
+        mode="max", 
+        patience=20, 
+        restore_best_weights=True
     )
+    
+
     rlr_cb = tf.keras.callbacks.ReduceLROnPlateau(
         monitor="val_loss", factor=0.5, patience=3, min_lr=1e-5, verbose=1
     )
@@ -193,6 +224,7 @@ def run_one_fold(run_root, val_subject, cfg):
     )
     (fold_dir / "summary.json").write_text(json.dumps(summary, indent=2))
     return summary
+
 
 def main():
     print("Initializing LOSO cross-validation...\n")
@@ -235,6 +267,25 @@ def main():
     print("\n=== Cross-validation complete ===")
     print(f"Mean val acc: {agg['mean_val_accuracy']:.4f}  (std: {agg['std_val_accuracy']:.4f})")
     print(f"Artifacts saved to: {run_root.resolve()}")
+   
+
+    best = find_best_model('models')
+
+    if best:
+        current_acc = agg["mean_val_accuracy"]
+        print("\n=== Model comparison ===")
+        print(f"Current run:  {current_acc:.4f}  ({run_root.name})")
+        print(f"Best overall: {best['acc']:.4f}  ({best['path'].name})")
+        if best['loss'] is not None:
+            print(f"Best model mean val loss: {best['loss']:.4f}")
+        if current_acc < best["acc"]:
+            print("→ Current model is not the best; keep best checkpoint from:")
+            print(f"   {best['path'].resolve()}")
+        else:
+            print("→ This model achieved the best mean validation accuracy so far!")
+    else:
+        print("No previous summary.json files found — this is the first recorded run.")
+
     plot_crossval_results(run_root)
 
 if __name__ == '__main__':
