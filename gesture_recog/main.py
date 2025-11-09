@@ -42,9 +42,10 @@ def main():
 	print('Initializing...\n')
 
 	train_ds, test_ds = build_train_test_datasets(
-    	train_subjects=(0,1,2,3,4,5,6),
-    	test_subjects=(7,),
-    	batch_size=64
+	    train_subjects=(0,1,2,3,4,5,6),
+	    test_subjects=(7,),
+	    batch_size=64,
+	    lp_window=5,  
 	)
 
 	model = build_imu_model(input_shape=(None, 3), num_classes=4)

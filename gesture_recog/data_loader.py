@@ -73,13 +73,31 @@ def iter_samples(subjects, root_dir=ROOT):
                 y = np.int32(CAT_TO_ID[cls])
                 yield x, y
 
+
+def lowpass_filter(x, window=5):
+    """ Moving avwerage lowpass filter over time, independent axes"""
+    w = tf.ones([window], tf.float32) / tf.cast(window, tf.float32)
+    f = tf.reshape(w, [window, 1, 1])
+
+    xN = tf.expand_dims(x, 0)
+    outs = []
+
+    for c in range(3):
+        xi = xN[:, :, c:c+1]
+        yi = tf.nn.conv1d(xi, filters=f, stride=1, padding='SAME')
+        outs.append(yi) 
+    y = tf.concat(outs, axis=-1)
+    return y[0] 
+
+
 def normalize_clip(x):
     x = tf.clip_by_value(x, -80.0, 80.0)
     mean = tf.reduce_mean(x, axis=0, keepdims=True)
     std  = tf.math.reduce_std(x, axis=0, keepdims=True) + 1e-6
     return (x - mean) / std
 
-def _make_ds(subjects, batch_size):
+
+def _make_ds(subjects, batch_size, lp_window=5):
     """Internal: build one dataset for a subject list."""
     output_signature = (
         tf.TensorSpec(shape=(None, 3), dtype=tf.float32),
@@ -89,7 +107,13 @@ def _make_ds(subjects, batch_size):
         lambda: iter_samples(subjects),
         output_signature=output_signature
     )
-    ds = ds.map(lambda x, y: (normalize_clip(x), y), num_parallel_calls=tf.data.AUTOTUNE)
+
+    def preprocess(x, y):
+        x = lowpass_filter(x, window=lp_window)  # <-- LPF here
+        x = normalize_clip(x)                            # then normalize
+        return x, y
+
+    ds = ds.map(preprocess, num_parallel_calls=tf.data.AUTOTUNE)
     ds = ds.padded_batch(
         batch_size,
         padded_shapes=(tf.TensorShape([None, 3]), tf.TensorShape([])),
@@ -97,12 +121,14 @@ def _make_ds(subjects, batch_size):
     )
     return ds.prefetch(tf.data.AUTOTUNE)
 
+
 def build_train_test_datasets(
     train_subjects=(0,1,2,3,4,5,6),  # 6–7 participants
     test_subjects=(7,),              # 1–2 participants
-    batch_size=64
+    batch_size=64,
+    lp_window=5
 ):
     """Return (train_ds, test_ds) split by participant IDs."""
-    train_ds = _make_ds(train_subjects, batch_size)
-    test_ds  = _make_ds(test_subjects,  batch_size)
+    train_ds = _make_ds(train_subjects, batch_size, lp_window=lp_window)
+    test_ds  = _make_ds(test_subjects,  batch_size, lp_window=lp_window)
     return train_ds, test_ds
