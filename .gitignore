@@ -2,3 +2,5 @@ build
 !.vscode/*i
 
 *.DS_store
+
+gesture_recog/models
