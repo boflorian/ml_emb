@@ -45,7 +45,9 @@ def main():
 	    train_subjects=(0,1,2,3,4,5,6),
 	    test_subjects=(7,),
 	    batch_size=64,
-	    lp_window=5,  
+	    lp_window=7,
+	    win=128,   # turn on segmentation
+	    hop=64,    # 50% overlap
 	)
 
 	model = build_imu_model(input_shape=(None, 3), num_classes=4)

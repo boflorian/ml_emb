@@ -74,6 +74,29 @@ def iter_samples(subjects, root_dir=ROOT):
                 yield x, y
 
 
+def segment_windows(x, y, win=128, hop=64, drop_short=False):
+    """
+    Avoids having to pad samples, models prefer same size inputs 
+    x: (T,3)  -> frames: (N, win, 3)
+    y: scalar -> labels: (N,)
+    """
+    if win is None or hop is None:
+        return tf.data.Dataset.from_tensors((x, y))  # no segmentation
+
+    # Frame along time axis, pad at the end so we don't drop tail segments
+    frames = tf.signal.frame(x, frame_length=win, frame_step=hop, axis=0, pad_end=True)  # (N, win, 3)
+
+    if drop_short:
+        # Remove frames that were padded entirely (rare). Keep if any real samples exist:
+        # Create a mask where any non-zero row exists in the frame before normalization.
+        mask = tf.reduce_any(tf.not_equal(frames, 0.0), axis=[1, 2])  # (N,)
+        frames = tf.boolean_mask(frames, mask)
+
+    n = tf.shape(frames)[0]
+    labels = tf.repeat(y, n)
+    return tf.data.Dataset.from_tensor_slices((frames, labels))
+
+
 def lowpass_filter(x, window=5):
     """ Moving avwerage lowpass filter over time, independent axes"""
     w = tf.ones([window], tf.float32) / tf.cast(window, tf.float32)
@@ -97,8 +120,7 @@ def normalize_clip(x):
     return (x - mean) / std
 
 
-def _make_ds(subjects, batch_size, lp_window=5):
-    """Internal: build one dataset for a subject list."""
+def _make_ds(subjects, batch_size, lp_window=5, win=None, hop=None, drop_short=False):
     output_signature = (
         tf.TensorSpec(shape=(None, 3), dtype=tf.float32),
         tf.TensorSpec(shape=(), dtype=tf.int32),
@@ -108,27 +130,40 @@ def _make_ds(subjects, batch_size, lp_window=5):
         output_signature=output_signature
     )
 
+    # --- window segmentation (optional) ---
+    if win is not None and hop is not None:
+        ds = ds.flat_map(lambda x, y: segment_windows(x, y, win=win, hop=hop, drop_short=drop_short))
+
+    # low-pass → normalize
     def preprocess(x, y):
-        x = lowpass_filter(x, window=lp_window)  # <-- LPF here
-        x = normalize_clip(x)                            # then normalize
+        x = lowpass_filter(x, window=lp_window)
+        x = normalize_clip(x)
         return x, y
 
     ds = ds.map(preprocess, num_parallel_calls=tf.data.AUTOTUNE)
-    ds = ds.padded_batch(
-        batch_size,
-        padded_shapes=(tf.TensorShape([None, 3]), tf.TensorShape([])),
-        padding_values=(tf.constant(0.0, tf.float32), tf.constant(0, tf.int32))
-    )
-    return ds.prefetch(tf.data.AUTOTUNE)
+
+    # If you use fixed windows, you can regular-batch (no padding). If not, keep padded_batch.
+    if win is not None and hop is not None:
+        ds = ds.batch(batch_size).prefetch(tf.data.AUTOTUNE)  # fixed length; no padding needed
+    else:
+        ds = ds.padded_batch(
+            batch_size,
+            padded_shapes=(tf.TensorShape([None, 3]), tf.TensorShape([])),
+            padding_values=(tf.constant(0.0, tf.float32), tf.constant(0, tf.int32))
+        ).prefetch(tf.data.AUTOTUNE)
+
+    return ds
 
 
 def build_train_test_datasets(
-    train_subjects=(0,1,2,3,4,5,6),  # 6–7 participants
-    test_subjects=(7,),              # 1–2 participants
+    train_subjects=(0,1,2,3,4,5,6),
+    test_subjects=(7,),
     batch_size=64,
-    lp_window=5
+    lp_window=5,
+    win=None,   # e.g., 128
+    hop=None,   # e.g., 64  (50% overlap)
+    drop_short=False
 ):
-    """Return (train_ds, test_ds) split by participant IDs."""
-    train_ds = _make_ds(train_subjects, batch_size, lp_window=lp_window)
-    test_ds  = _make_ds(test_subjects,  batch_size, lp_window=lp_window)
+    train_ds = _make_ds(train_subjects, batch_size, lp_window, win, hop, drop_short)
+    test_ds  = _make_ds(test_subjects,  batch_size, lp_window, win, hop, drop_short)
     return train_ds, test_ds
