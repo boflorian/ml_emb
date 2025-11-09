@@ -46,11 +46,10 @@ def main():
 	    test_subjects=(7,),
 	    batch_size=64,
 	    lp_window=7,
-	    win=128,   # turn on segmentation
-	    hop=64,    # 50% overlap
+	    win=128,  # fixed windows recommended for DNN
+	    hop=64
 	)
-
-	model = build_imu_model(input_shape=(None, 3), num_classes=4)
+	model = build_imu_model(num_classes=4)
 	model.fit(train_ds, validation_data=test_ds, epochs=20)  # test_ds used as validation here
 	model.evaluate(test_ds)
 
