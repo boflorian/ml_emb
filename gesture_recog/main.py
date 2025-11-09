@@ -2,9 +2,10 @@ import os
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 
 import json
+import csv 
 from pathlib import Path
 from datetime import datetime
-
+import pandas as pd 
 import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
@@ -15,7 +16,12 @@ absl.logging.set_verbosity(absl.logging.ERROR)
 from data_loader import build_train_test_datasets
 from nn_def import build_imu_model
 
-SUBJECTS = list(range(8))  # persons 0..7
+SUBJECTS = list(range(8))  
+CONFIG = dict(
+        win=128, hop=64, lp_window=7, batch_size=64, epochs=20,
+        num_classes=4, lr=1e-3, l2=1e-4, dropout=0.5
+    )
+
 
 def plot_training_curves(history, save_path):
     hist = history.history
@@ -34,60 +40,67 @@ def plot_training_curves(history, save_path):
 def plot_crossval_results(run_root):
     """Aggregate all fold histories under run_root and plot mean ± std accuracy/loss."""
     fold_dirs = sorted((run_root).glob("fold_*"))
-    histories = []
+    dfs = []
     for fd in fold_dirs:
-        hist_file = fd / "history.csv"
-        if hist_file.exists():
-            df = pd.read_csv(hist_file)
+        f = fd / "history.csv"
+        if f.exists():
+            df = pd.read_csv(f)
             df["fold"] = fd.name
-            histories.append(df)
-    if not histories:
+            dfs.append(df)
+
+    if not dfs:
         print("No fold histories found for summary plot.")
         return
 
-    df_all = pd.concat(histories, ignore_index=True)
-    epochs = np.arange(1, df_all["epoch"].max() + 1)
+    df_all = pd.concat(dfs, ignore_index=True)
 
-    # group by epoch → mean ± std
-    g = df_all.groupby("epoch").agg({
-        "accuracy": ["mean", "std"],
-        "val_accuracy": ["mean", "std"],
-        "loss": ["mean", "std"],
-        "val_loss": ["mean", "std"],
+    # Some CSVLogger versions use 0-based epoch; keep as-is but sort
+    df_all = df_all.sort_values("epoch")
+
+    # Group by epoch; mean/std will naturally ignore missing folds at later epochs
+    g = df_all.groupby("epoch", as_index=True).agg({
+        "accuracy":      ["mean", "std"],
+        "val_accuracy":  ["mean", "std"],
+        "loss":          ["mean", "std"],
+        "val_loss":      ["mean", "std"],
     })
     g.columns = ["_".join(c) for c in g.columns]
+    g = g.sort_index()
+
+    # Use the grouped index as x-axis to avoid shape mismatches
+    epochs = g.index.to_numpy()  # this is 0..N based, can display as is
 
     plt.figure(figsize=(10, 4))
 
-    # --- accuracy ---
+    # --- Accuracy ---
     plt.subplot(1, 2, 1)
-    plt.plot(epochs, g["accuracy_mean"], label="Train acc (mean)")
-    plt.fill_between(epochs,
-                     g["accuracy_mean"] - g["accuracy_std"],
-                     g["accuracy_mean"] + g["accuracy_std"],
-                     alpha=0.2)
-    plt.plot(epochs, g["val_accuracy_mean"], label="Val acc (mean)")
-    plt.fill_between(epochs,
-                     g["val_accuracy_mean"] - g["val_accuracy_std"],
-                     g["val_accuracy_mean"] + g["val_accuracy_std"],
-                     alpha=0.2)
+    if "accuracy_mean" in g:
+        y = g["accuracy_mean"].to_numpy()
+        ysd = g["accuracy_std"].to_numpy()
+        plt.plot(epochs, y, label="Train acc (mean)")
+        plt.fill_between(epochs, y - ysd, y + ysd, alpha=0.2)
+    if "val_accuracy_mean" in g:
+        yv = g["val_accuracy_mean"].to_numpy()
+        yvsd = g["val_accuracy_std"].to_numpy()
+        plt.plot(epochs, yv, label="Val acc (mean)")
+        plt.fill_between(epochs, yv - yvsd, yv + yvsd, alpha=0.2)
     plt.title("Cross-validation Accuracy")
     plt.xlabel("Epoch")
     plt.ylabel("Accuracy")
     plt.legend()
 
-    # --- loss ---
+    # --- Loss ---
     plt.subplot(1, 2, 2)
-    plt.plot(epochs, g["loss_mean"], label="Train loss (mean)")
-    plt.fill_between(epochs,
-                     g["loss_mean"] - g["loss_std"],
-                     g["loss_mean"] + g["loss_std"],
-                     alpha=0.2)
-    plt.plot(epochs, g["val_loss_mean"], label="Val loss (mean)")
-    plt.fill_between(epochs,
-                     g["val_loss_mean"] - g["val_loss_std"],
-                     g["val_loss_mean"] + g["val_loss_std"],
-                     alpha=0.2)
+    if "loss_mean" in g:
+        y = g["loss_mean"].to_numpy()
+        ysd = g["loss_std"].to_numpy()
+        plt.plot(epochs, y, label="Train loss (mean)")
+        plt.fill_between(epochs, y - ysd, y + ysd, alpha=0.2)
+    if "val_loss_mean" in g:
+        yv = g["val_loss_mean"].to_numpy()
+        yvsd = g["val_loss_std"].to_numpy()
+        plt.plot(epochs, yv, label="Val loss (mean)")
+        plt.fill_between(epochs, yv - yvsd, yv + yvsd, alpha=0.2)
     plt.title("Cross-validation Loss")
     plt.xlabel("Epoch")
     plt.ylabel("Loss")
@@ -114,13 +127,27 @@ def run_one_fold(run_root, val_subject, cfg):
     cfg_fold["split"] = dict(train_subjects=list(train_subjects), val_subjects=[val_subject])
     (fold_dir / "config.json").write_text(json.dumps(cfg_fold, indent=2))
 
+
+    # augmentation strengths 
+    aug_cfg = dict(
+	    rot_deg=20.0,
+	    scale_low=0.9, scale_high=1.1,
+	    jitter_std=0.05,
+	    shift_max=8,
+	    time_mask_prob=0.35, time_mask_max_ratio=0.12,
+	    mag_warp_strength=0.15,
+	    time_warp_ratio=0.20,
+	)
+
+
     # data (train uses augment=True internally per our earlier data_loader; val False)
     train_ds, val_ds = build_train_test_datasets(
         train_subjects=train_subjects,
         test_subjects=test_subjects,
         batch_size=cfg["batch_size"],
         lp_window=cfg["lp_window"],
-        win=cfg["win"], hop=cfg["hop"], drop_short=False
+        win=cfg["win"], hop=cfg["hop"], 
+        aug_cfg=aug_cfg
     )
 
     # model (compile with desired lr, l2/dropout handled inside builder)
@@ -170,11 +197,7 @@ def run_one_fold(run_root, val_subject, cfg):
 def main():
     print("Initializing LOSO cross-validation...\n")
 
-    # common config
-    config = dict(
-        win=128, hop=64, lp_window=7, batch_size=64, epochs=30,
-        num_classes=4, lr=1e-3, l2=None, dropout=0.3
-    )
+    config = CONFIG 
 
     # run root
     run_id = datetime.now().strftime("%Y%m%d-%H%M%S") + "_cv"
@@ -200,8 +223,7 @@ def main():
     )
     (run_root / "summary.json").write_text(json.dumps(agg, indent=2))
 
-    # also write CSV for quick comparisons
-    import csv
+
     with open(run_root / "summary.csv", "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["val_subject", "best_val_accuracy"])

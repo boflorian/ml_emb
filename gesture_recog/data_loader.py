@@ -123,12 +123,8 @@ def normalize_clip(x):
 
 def _make_ds(subjects, batch_size, lp_window=5,
              win=None, hop=None, drop_short=False,
-             augment=False):
-    """
-    Build one dataset for a subject list.
-    If win & hop provided, sequences are pre-segmented into fixed windows.
-    If augment=True, apply IMU augmentations on-the-fly to training data only.
-    """
+             augment=False,
+             aug_cfg=None):
     output_signature = (
         tf.TensorSpec(shape=(None, 3), dtype=tf.float32),
         tf.TensorSpec(shape=(), dtype=tf.int32),
@@ -136,14 +132,13 @@ def _make_ds(subjects, batch_size, lp_window=5,
     ds = tf.data.Dataset.from_generator(lambda: iter_samples(subjects),
                                         output_signature=output_signature)
 
-    # Optional segmentation (if you already added segment_windows earlier)
     if win is not None and hop is not None:
         ds = ds.flat_map(lambda x, y: segment_windows(x, y, win=win, hop=hop, drop_short=drop_short))
 
+    aug_cfg = aug_cfg or {}  # default strengths
+
     def preprocess_train(x, y):
-        # augment in RAW space
-        x = augment_sample(x)
-        # then smooth & normalize
+        x = augment_sample(x, **aug_cfg)                    
         x = lowpass_filter(x, window=lp_window)
         x = normalize_clip(x)
         return x, y
@@ -157,14 +152,13 @@ def _make_ds(subjects, batch_size, lp_window=5,
                 num_parallel_calls=tf.data.AUTOTUNE)
 
     if win is not None and hop is not None:
-        ds = ds.batch(batch_size).prefetch(tf.data.AUTOTUNE)  # fixed windows
+        ds = ds.batch(batch_size).prefetch(tf.data.AUTOTUNE)
     else:
         ds = ds.padded_batch(
             batch_size,
             padded_shapes=(tf.TensorShape([None, 3]), tf.TensorShape([])),
             padding_values=(tf.constant(0.0, tf.float32), tf.constant(0, tf.int32))
         ).prefetch(tf.data.AUTOTUNE)
-
     return ds
 
 
@@ -173,10 +167,10 @@ def build_train_test_datasets(
     test_subjects=(7,),
     batch_size=64,
     lp_window=5,
-    win=None, hop=None, drop_short=False
+    win=None, hop=None, drop_short=False, aug_cfg=None
 ):
     train_ds = _make_ds(train_subjects, batch_size, lp_window,
-                        win, hop, drop_short, augment=True)
+                        win, hop, drop_short, augment=True, aug_cfg=aug_cfg)
     test_ds  = _make_ds(test_subjects,  batch_size, lp_window,
-                        win, hop, drop_short, augment=False)
+                        win, hop, drop_short, augment=False, aug_cfg=None)
     return train_ds, test_ds
