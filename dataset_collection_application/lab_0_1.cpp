@@ -17,8 +17,8 @@ static FATFS fs;
 
 // Configuration
 // Data collection parameters. Edit as needed.
-const uint32_t MAX_DATA_COLLECTION_TIME_US = 10 * 1000 * 1000; // 10 seconds
-uint32_t RECORD_TIMES = 10;
+const uint32_t MAX_DATA_COLLECTION_TIME_US = 3 * 1000 * 1000; // duration of session 
+uint32_t RECORD_TIMES = 10; // number of sessions 
 
 
 // Control flags
@@ -107,7 +107,7 @@ static const char *sd_mount_or_format(FATFS *pfs, int card_num)
     return drive;
 }
 
-static void open_log_file(FIL *f, const char *drive, const char *prefix, bool write_header) {
+static void open_log_file(FIL *f, const char *drive, const char *prefix) {
     char path[96];
     uint64_t t = time_us_64();
 
@@ -116,14 +116,6 @@ static void open_log_file(FIL *f, const char *drive, const char *prefix, bool wr
     FRESULT fr = f_open(f, path, FA_WRITE | FA_CREATE_ALWAYS);
     if (fr != FR_OK) die(fr, "f_open");
     printf("logging to: %s\n", path);
-
-    if (write_header) {
-        const char *hdr = "ax,ay,az\n";
-        UINT bw = 0;
-        fr = f_write(f, hdr, (UINT)strlen(hdr), &bw);
-        if (fr != FR_OK || bw != strlen(hdr)) die(fr, "f_write(header)");
-        f_sync(f);
-    }
 }
 
 
@@ -133,14 +125,22 @@ static void core1_entry(void)
 
     uint32_t last_seen_session = 0;
 
+    // Open single file for all sessions
+    FIL f;
+    open_log_file(&f, drive, FILE_NAME_PREFIX);
+
     for (;;) {
         while (SESSION == last_seen_session && !STOP_ALL) { tight_loop_contents(); }
         if (STOP_ALL) break;
 
-        FIL f;
-        open_log_file(&f, drive, FILE_NAME_PREFIX, true);
+        // Write sample header for this session
+        char header[96];
+        int hdr_len = snprintf(header, sizeof header, "sample%u\nax,ay,az\n", SESSION);
+        UINT bw = 0;
+        FRESULT fr = f_write(&f, header, (UINT)hdr_len, &bw);
+        if (fr != FR_OK || bw != (UINT)hdr_len) die(fr, "f_write(sample header)");
 
-        UINT bw; FRESULT fr; uint32_t lines_since_sync = 0;
+        uint32_t lines_since_sync = 0;
         imu_sample_t s;
         for (;;) 
         {
@@ -158,12 +158,19 @@ static void core1_entry(void)
             tight_loop_contents();
         }
 
+        // Write 4 empty lines between samples
+        const char *separator = "\n\n\n\n";
+        bw = 0;
+        fr = f_write(&f, separator, (UINT)strlen(separator), &bw);
+        if (fr != FR_OK || bw != strlen(separator)) die(fr, "f_write(separator)");
+
         f_sync(&f);
-        f_close(&f);
 
         last_seen_session = SESSION;
     }
 
+    f_sync(&f);
+    f_close(&f);
     f_unmount(drive);
     while (1) tight_loop_contents();
 }
@@ -171,7 +178,7 @@ static void core1_entry(void)
 int main() 
 {
     stdio_init_all();
-    sleep_ms(2000);
+    sleep_ms(6000);
 
     init_pio_for_ws2812();
     show_color_rgb(255, 0, 0);
