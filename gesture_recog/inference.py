@@ -8,7 +8,9 @@ from main import find_best_model
 from data_loader import parse_gesture_file, lowpass_filter, normalize_clip
 
 # fixed defaults
-DATASET_ROOT = Path("dataset_magic_wand")
+#DATASET_ROOT = Path("dataset_magic_wand")
+DATASET_ROOT = Path("dataset_pico_gestures/processed")
+
 BATCH_SIZE   = 64
 WIN          = 64
 LP_WINDOW    = 7
@@ -113,9 +115,9 @@ def main():
     for row in metrics["confusion_matrix"]:
         print(f"    {row}")
 
-    #print("\nFirst few predictions:")
-    #for yt, yp in list(zip(y_true, y_pred))[:10]:
-    #    print(f"true={CATEGORIES[int(yt)]:<8}  pred={CATEGORIES[int(yp)]}")
+    print("\nFirst few predictions:")
+    for yt, yp in list(zip(y_true, y_pred))[:]:
+        print(f"true={CATEGORIES[int(yt)]:<8}  pred={CATEGORIES[int(yp)]}")
 
 
 if __name__ == "__main__":

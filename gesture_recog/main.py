@@ -11,15 +11,15 @@ import numpy as np
 import tensorflow as tf
 tf.get_logger().setLevel("ERROR")
 import absl.logging
-absl.logging.set_verbosity(absl.logging.ERROR)
+from termcolor import colored 
 
 from data_loader import build_train_test_datasets, _make_ds, lowpass_filter, normalize_clip 
-from nn_def import build_imu_model
+from nn_def import build_cnn
 
 SUBJECTS = list(range(8))  
 CONFIG = dict(
-        win=256, hop=64, lp_window=7, batch_size=64, epochs=50,
-        num_classes=4, lr=1e-3, l2=1e-2, dropout=0.5
+        win=64, hop=64, lp_window=7, batch_size=32, epochs=100,
+        num_classes=4, lr=5e-3, l2=6e-3, dropout=0.3, augment=False
     )
 
 
@@ -34,11 +34,10 @@ def find_best_model(models_root="models"):
         if summ.exists():
             try:
                 data = json.loads(summ.read_text())
-                acc = data.get("mean_val_accuracy")
-                loss = data.get("mean_val_loss", None)
+                acc = data.get("consolidated_mean_accuracy")
                 if acc is not None:
                     if (best is None) or (acc > best["acc"]):
-                        best = {"acc": acc, "loss": loss, "path": sub}
+                        best = {"acc": acc, "path": sub}
                         best_path = sub
             except Exception:
                 continue
@@ -137,7 +136,7 @@ def plot_crossval_results(run_root):
     print(f"Saved cross-validation summary plot: {save_path}")
 
 
-def run_one_fold(run_root, val_subject, cfg):
+def run_one_fold(run_root, val_subject, cfg, augment=True):
     train_subjects = tuple(s for s in SUBJECTS if s != val_subject)
     test_subjects  = (val_subject,)  # validate on this person
 
@@ -163,18 +162,19 @@ def run_one_fold(run_root, val_subject, cfg):
 	)
 
 
-    # data (train uses augment=True internally per our earlier data_loader; val False)
+    # data train uses augment=True internally
     train_ds, val_ds = build_train_test_datasets(
         train_subjects=train_subjects,
         test_subjects=test_subjects,
         batch_size=cfg["batch_size"],
         lp_window=cfg["lp_window"],
         win=cfg["win"], hop=cfg["hop"], 
-        aug_cfg=aug_cfg
+        aug_cfg=aug_cfg,
+        augment = augment
     )
 
     # model (compile with desired lr, l2/dropout handled inside builder)
-    model = build_imu_model(win=cfg["win"],
+    model = build_cnn(win=cfg["win"],
                             num_classes=cfg["num_classes"],
                             lr=float(cfg["lr"]),
                             l2=cfg.get("l2"),
@@ -193,7 +193,7 @@ def run_one_fold(run_root, val_subject, cfg):
     early_cb = tf.keras.callbacks.EarlyStopping(
         monitor="val_accuracy",
         mode="max", 
-        patience=20, 
+        patience=25, 
         restore_best_weights=True
     )
     
@@ -318,6 +318,7 @@ def main():
     print("Initializing LOSO cross-validation...\n")
 
     config = CONFIG
+    augment = config['augment']
 
     # run root
     run_id = datetime.now().strftime("%Y%m%d-%H%M%S") + "_cv"
@@ -325,11 +326,12 @@ def main():
     run_root.mkdir(parents=True, exist_ok=True)
     (run_root / "config.json").write_text(json.dumps(config, indent=2))
 
+
     # ---- 1) Run all folds ----------------------------------------------------
     fold_summaries = []
     for val_subject in SUBJECTS:
         print(f"\n=== Fold (val subject = {val_subject}) ===")
-        sum_fold = run_one_fold(run_root, val_subject, config)
+        sum_fold = run_one_fold(run_root, val_subject, config, augment=augment)
         fold_summaries.append(sum_fold)
         print(f"Fold {val_subject}: best val acc = {sum_fold['best_val_accuracy']:.4f}")
 
@@ -382,7 +384,7 @@ def main():
     print("\nAveraging fold checkpoints...")
     avg_model = average_weights_from_checkpoints(
         ckpt_paths=ckpts,
-        build_model_fn=build_imu_model,
+        build_model_fn=build_cnn,
         build_kwargs=build_kwargs
     )
     (run_root / "final").mkdir(exist_ok=True, parents=True)
@@ -411,7 +413,7 @@ def main():
         drop_short=False
     )
 
-    refit_model = build_imu_model(
+    refit_model = build_cnn(
         win=CONFIG["win"],
         num_classes=CONFIG["num_classes"],
         lr=min(3e-4, float(CONFIG["lr"]) * 0.3),
@@ -420,7 +422,7 @@ def main():
     )
     refit_model.set_weights(avg_model.get_weights())
 
-    refit_ckpt = run_root / "final" / "refit_all.keras"
+    refit_ckpt = run_root / "final" / "final.keras"
     refit_callbacks = [
         tf.keras.callbacks.ModelCheckpoint(
             filepath=str(refit_ckpt), monitor="val_accuracy",
@@ -440,14 +442,15 @@ def main():
     refit_model.fit(
         refit_train_ds,
         validation_data=refit_val_ds,
-        epochs=max(15, min(30, CONFIG["epochs"] // 2)),
+        epochs=max(50, min(30, CONFIG["epochs"] // 2)),
         callbacks=refit_callbacks,
         verbose=1
     )
 
     # ---- 4) Evaluate consolidated model AFTER it exists ---------------------
-    final_refit = run_root / "final" / "refit_all.keras"
+    final_refit = run_root / "final" / "final.keras"
     final_avg   = run_root / "final" / "averaged_folds.keras"
+
 
     cons_tag = None
     cons_mean = None
@@ -514,17 +517,17 @@ def main():
         print("\n=== Model comparison ===")
         print(f"Current run:  {current_acc:.4f}  ({run_root.name})")
         print(f"Best overall (CV mean proxy): {best['acc']:.4f}  ({best['path'].name})")
-        if best['loss'] is not None:
-            print(f"Best model mean val loss: {best['loss']:.4f}")
         if current_acc < best["acc"]:
-            print("→ Current model is not the best; keep best checkpoint from:")
+            print(colored("→ Current model is not the best; keep best checkpoint from:", "red"))
             print(f"   {best['path'].resolve()}")
         else:
-            print("→ This model achieved the best accuracy so far (vs CV-best proxy)!")
+            print(colored("→ This model achieved the best accuracy so far (vs CV-best proxy)!", "green"))
     else:
         print("No previous summary.json files found — this is the first recorded run.")
 
-    plot_crossval_results(run_root)
+    
+    #plot_crossval_results(run_root)
+
 
 if __name__ == '__main__':
     main()

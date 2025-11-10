@@ -125,6 +125,7 @@ def _make_ds(subjects, batch_size, lp_window=5,
              win=None, hop=None, drop_short=False,
              augment=False,
              aug_cfg=None):
+    
     output_signature = (
         tf.TensorSpec(shape=(None, 3), dtype=tf.float32),
         tf.TensorSpec(shape=(), dtype=tf.int32),
@@ -151,6 +152,8 @@ def _make_ds(subjects, batch_size, lp_window=5,
     ds = ds.map(preprocess_train if augment else preprocess_eval,
                 num_parallel_calls=tf.data.AUTOTUNE)
 
+    ds = ds.shuffle(5000, reshuffle_each_iteration=True)
+
     if win is not None and hop is not None:
         ds = ds.batch(batch_size).prefetch(tf.data.AUTOTUNE)
     else:
@@ -163,14 +166,15 @@ def _make_ds(subjects, batch_size, lp_window=5,
 
 
 def build_train_test_datasets(
-    train_subjects=(0,1,2,3,4,5,6),
-    test_subjects=(7,),
+    train_subjects=(0,1,2,3,4,5,6), # fallback, should be overwritten 
+    test_subjects=(7,), # fallback, should be overwritten 
     batch_size=64,
     lp_window=5,
-    win=None, hop=None, drop_short=False, aug_cfg=None
+    win=None, hop=None, drop_short=False, aug_cfg=None, 
+    augment=True
 ):
     train_ds = _make_ds(train_subjects, batch_size, lp_window,
-                        win, hop, drop_short, augment=True, aug_cfg=aug_cfg)
+                        win, hop, drop_short, augment=augment, aug_cfg=aug_cfg)
     test_ds  = _make_ds(test_subjects,  batch_size, lp_window,
                         win, hop, drop_short, augment=False, aug_cfg=None)
     return train_ds, test_ds
