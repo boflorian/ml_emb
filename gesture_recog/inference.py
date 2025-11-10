@@ -4,6 +4,7 @@ import argparse
 import numpy as np 
 import tensorflow as tf 
 from tensorflow import keras 
+import re 
 
 from main import find_best_model
 from data_loader import parse_gesture_file, iter_samples, lowpass_filter, normalize_clip
@@ -17,43 +18,47 @@ def load_best_model(models_root="models"):
 
     run_path = Path(best["path"])
     ckpt = run_path / "checkpoints" / "best_valacc.keras"
-    model_path = ckpt if ckpt.exists() else (run_path / "final.keras")
+    model_path = ckpt if ckpt.exists() else (run_path / "final" / "final.keras")
 
     print("Loading model from: {model_path}")
     model = keras.models.load_model(model_path)
     return model, run_path
 
 
-def build_eval_dataset(dataset_root: Path, batch_size=64, lp_window=7, win=None):
-    """
-    dataset_root must look like:
-      root/negative/*.txt
-      root/ring/*.txt
-      root/slope/*.txt
-      root/wing/*.txt
-    Uses your iter_samples() to yield (seq[T,3], label), then lowpass + normalize.
-    If win is given, each sequence is resampled to fixed length (win).
-    """
+def build_eval_dataset(dataset_root, subject, batch_size=64, lp_window=7, win=64):
     dataset_root = Path(dataset_root)
+    subject = Path(subject)
+
+    # extract person id
+    match = re.search(r'person(\d+)\.txt$', subject.name)
+    person_id = int(match.group(1))
+    subject = (person_id,)
 
     output_signature = (
-        tf.TensorSpec(shape=(None, 3), dtype=tf.float32),
+        tf.TensorSpec(shape=(None, 3), dtype=tf.float32),  # variable T
         tf.TensorSpec(shape=(), dtype=tf.int32),
     )
 
-    gen = lambda: iter_samples(dataset_root)
-
+    gen = lambda: iter_samples(subject, dataset_root)
     ds = tf.data.Dataset.from_generator(gen, output_signature=output_signature)
 
-    def preprocess(x, y): 
-        x = lowpass_filter(x)
-        x = normalize_clip(x)
+    def to_fixed_len(x):
+        # center-crop/trim then pad to win
+        x = x[:win]
+        pad = tf.maximum(0, win - tf.shape(x)[0])
+        x = tf.pad(x, [[0, pad], [0, 0]])
+        return x  # [win, 3]
 
+    def preprocess(x, y):
+        x = lowpass_filter(x, window=lp_window)  # <- actually use lp_window
+        x = normalize_clip(x)
+        x = to_fixed_len(x)                      # <- force [win,3]
         return x, y
 
     ds = ds.map(preprocess, num_parallel_calls=tf.data.AUTOTUNE)
-
-    return ds.prefetch(tf.data.AUTOTUNE)
+    ds = ds.batch(batch_size)                    # <- batch to [B, win, 3]
+    ds = ds.prefetch(tf.data.AUTOTUNE)
+    return ds
 
 
 def evaluate_dataset(model, ds, categories): 
@@ -90,49 +95,12 @@ def evaluate_dataset(model, ds, categories):
         "macro_f1": macro_f1,
         "per_class": [
             {"class": categories[i], "precision": float(prec[i]), "recall": float(rec[i]), "f1": float(f1[i])}
-            for i in range(len(class_names))
+            for i in range(len(CATEGORIES))
         ],
         "confusion_matrix": cm.tolist(),
     }
+    return metrics
 
-def predict_file_samples(model, file_path: Path, win=None, lp_window=7):
-    """
-    Reads one personX/sessionX file, runs deterministic preprocessing,
-    optional resample to fixed win, and prints predicted label + confidence.
-    """
-    items = parse_gesture_file(file_path)
-    # Handle both dict-style and raw-array outputs
-    sequences = []
-    for it in items:
-        if isinstance(it, dict) and "data" in it:
-            arr = np.asarray(it["data"], dtype=np.float32)
-            sid = it.get("sample_id", None)
-        else:
-            arr = np.asarray(it, dtype=np.float32)
-            sid = None
-        if arr.size == 0:
-            continue
-        sequences.append((sid, arr))
-
-    if not sequences:
-        print(f"No valid samples in {file_path}")
-        return
-
-    print(f"\nPredictions for {file_path.name}:")
-    for idx, (sid, x_raw) in enumerate(sequences, start=1):
-        # preprocess in TF to keep parity with training functions
-        x = tf.convert_to_tensor(x_raw, tf.float32)
-        x = lowpass_filter(x)
-        x = normalize_clip(x)
-        if win is not None:
-            x = tf.convert_to_tensor(resample_linear_to_length(x.numpy(), win), tf.float32)
-
-        probs = model.predict(x[None, ...], verbose=0)[0]
-        pred_id = int(np.argmax(probs))
-        conf = float(probs[pred_id])
-        label = CATEGORIES[pred_id]
-        tag = sid if sid else f"sample{idx}"
-        print(f"  {tag:>10s} -> {label:>8s}  (conf={conf:.2f})")
 
 
 p = argparse.ArgumentParser(description="Run inference on a single data file")
@@ -143,11 +111,16 @@ samples = parse_gesture_file(args.file)
 if not samples:
     raise SystemExit(f"No samples found in {args.file}")
 
-model, run_dir = load_best_model()
+model, run_dir = load_best_model()  
 
-ds = build_eval_dataset(args.dataset_root, batch_size=args.batch_size,
-                                lp_window=args.lp_window, win=args.win)
-metrics = evaluate_dataset(model, ds, CATEGORIES, verbose=0)
+dataset_root = Path('dataset_magic_wand')
+s = Path(args.file)
+
+ds = build_eval_dataset(dataset_root, s, batch_size=64,
+                                lp_window=7, win=64)
+metrics = evaluate_dataset(model, ds, CATEGORIES)
+
+
 print("\nExternal dataset metrics")
 print("  accuracy :", f"{metrics['accuracy']:.4f}")
 print("  macro F1 :", f"{metrics['macro_f1']:.4f}")
