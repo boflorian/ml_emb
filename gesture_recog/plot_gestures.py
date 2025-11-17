@@ -1,59 +1,74 @@
-import tensorflow as tf
 import argparse
 from pathlib import Path
 import re
-from collections import defaultdict
-
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401  (needed for 3D projection)
 
-from data_loader import parse_gesture_file, iter_samples
+from data_loader import parse_gesture_file, iter_samples  # your existing helpers
 
 
 SAMPLE_RE = re.compile(r"^sample\d+\s*$", re.IGNORECASE)
 
 
+# ------------------------------------------------------------
+# Filters & helpers
+# ------------------------------------------------------------
 def iir_alpha_from_fc(fc_hz: float, fs_hz: float) -> float:
     """
     First-order low-pass IIR (one-pole) with given cutoff fc (Hz) at sampling fs (Hz).
     y[n] = alpha * y[n-1] + (1-alpha) * x[n], with alpha = exp(-2*pi*fc/fs).
     """
     if fc_hz <= 0:
-        # degenerate -> pure integrator; clamp
         return 0.0
     return float(np.exp(-2.0 * np.pi * fc_hz / fs_hz))
 
 
+def estimate_g0(acc: np.ndarray, fs: float) -> np.ndarray:
+    """
+    Estimate initial gravity vector from the first ~0.3 s (or fewer if short).
+    Scales its magnitude to 9.81 m/s^2 to aid convergence.
+    """
+    n = max(1, int(min(0.3 * fs, len(acc))))
+    g0 = np.mean(acc[:n], axis=0)
+    mag = np.linalg.norm(g0) + 1e-9
+    return g0 * (9.81 / mag)
+
+
 def lowpass_gravity(acc: np.ndarray, fs: float, fc: float) -> np.ndarray:
     """
-    Estimate gravity via one-pole low-pass. acc: [T,3] (m/s^2).
-    Returns g_est [T,3].
+    One-pole low-pass estimate of gravity (sensor frame).
     """
     alpha = iir_alpha_from_fc(fc, fs)
     g = np.zeros_like(acc)
-    # initialize with first sample scaled to ~|g|=9.81 (helps convergence if start is not static)
-    g0 = acc[0].copy()
-    mag = np.linalg.norm(g0) + 1e-9
-    g[0] = g0 * (9.81 / mag)
-
+    g[0] = estimate_g0(acc, fs)
     for i in range(1, acc.shape[0]):
         g[i] = alpha * g[i - 1] + (1.0 - alpha) * acc[i]
     return g
 
 
-def remove_gravity(acc: np.ndarray, fs: float, fc: float = 0.7) -> np.ndarray:
+def lowpass_gravity_zero_phase(acc: np.ndarray, fs: float, fc: float) -> np.ndarray:
     """
-    Complementary split: linear_acc = acc - lowpass(acc).
+    Zero-phase version: run the same one-pole forward, then backward.
+    Removes phase lag that otherwise biases a_lin.
     """
-    g_est = lowpass_gravity(acc, fs, fc)
+    g_fwd = lowpass_gravity(acc, fs, fc)
+    g_bwd = lowpass_gravity(g_fwd[::-1], fs, fc)[::-1]
+    return g_bwd
+
+
+def remove_gravity(acc: np.ndarray, fs: float, fc: float = 0.7) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Complementary split: linear_acc = acc - lowpass(acc) (zero-phase to avoid lag).
+    """
+    g_est = lowpass_gravity_zero_phase(acc, fs, fc)
     return acc - g_est, g_est
 
 
 def trim_stillness(acc_lin: np.ndarray, thresh: float = 0.15):
     """
     Trim leading/trailing near-still segments by thresholding the norm.
-    thresh in m/s^2. Returns sliced acc_lin and the applied indices.
+    thresh in m/s^2. Returns sliced acc_lin and the indices [left, right].
     """
     norms = np.linalg.norm(acc_lin, axis=1)
     T = len(norms)
@@ -66,8 +81,8 @@ def trim_stillness(acc_lin: np.ndarray, thresh: float = 0.15):
     return acc_lin[left : right + 1], left, right
 
 
-def integrate_twice(acc_lin: np.ndarray, fs: float, method: str='euler',
-                    zero_vel_ends: bool = False):
+def integrate_twice(acc_lin: np.ndarray, fs: float, method: str = "trapz",
+                    zero_vel_ends: bool = True):
     """
     Integrate linear acceleration to velocity and position.
     method: 'euler' or 'trapz'
@@ -92,9 +107,8 @@ def integrate_twice(acc_lin: np.ndarray, fs: float, method: str='euler',
     if zero_vel_ends and T > 1:
         # subtract a per-axis linear trend from v so v[0] and v[-1] are ~0
         t = np.arange(T, dtype=float)
+        A = np.vstack([t, np.ones_like(t)]).T
         for ax in range(3):
-            # fit line to v[:,ax]
-            A = np.vstack([t, np.ones_like(t)]).T
             m, b = np.linalg.lstsq(A, v[:, ax], rcond=None)[0]
             v[:, ax] = v[:, ax] - (m * t + b)
         # re-integrate position from detrended velocity to keep consistency
@@ -122,69 +136,59 @@ def plot_trajectory(p: np.ndarray, title: str):
     plt.tight_layout()
 
 
-def plot_signals(t: np.ndarray, acc: np.ndarray, g_est: np.ndarray,
-                 acc_lin: np.ndarray, v: np.ndarray, p: np.ndarray, name: str):
-    fig, axs = plt.subplots(3, 1, figsize=(10, 8), sharex=True)
-    labs = ["x", "y", "z"]
-    for d in range(3):
-        axs[0].plot(t, acc[:, d], label=f"a{labs[d]} (raw)")
-        axs[0].plot(t, g_est[:, d], linestyle="--", label=f"g{labs[d]} (LPF)")
-        axs[0].plot(t, acc_lin[:, d], label=f"a{labs[d]}-lin")
-        axs[1].plot(t, v[:, d], label=f"v{labs[d]}")
-        axs[2].plot(t, p[:, d], label=f"p{labs[d]}")
-    axs[0].set_ylabel("acc (m/s²)")
-    axs[1].set_ylabel("vel (m/s)")
-    axs[2].set_ylabel("pos (m)")
-    axs[2].set_xlabel("time (s)")
-    axs[0].legend(ncol=3, fontsize=8)
-    axs[1].legend(ncol=3, fontsize=8)
-    axs[2].legend(ncol=3, fontsize=8)
-    fig.suptitle(f"Signals: {name}")
-    plt.tight_layout(rect=[0, 0, 1, 0.97])
-
-
+# ------------------------------------------------------------
+# Main
+# ------------------------------------------------------------
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("file", type=Path, help='Path to file')
-    ap.add_argument("--fc", type=float, default=0.5, help="LP cutoff for gravity removal [Hz]")
-
+    ap.add_argument("file", type=Path, help="Path to file")
+    ap.add_argument("--fc", type=float, default=0.7, help="LP cutoff for gravity removal [Hz]")
+    ap.add_argument("--thresh", type=float, default=0.15, help="Stillness threshold [m/s^2]")
+    ap.add_argument("--method", type=str, default="trapz", choices=["euler", "trapz"],
+                    help="Integration method")
+    ap.add_argument("--no-zupt", action="store_true",
+                    help="Disable end-to-end zero-velocity pinning")
     args = ap.parse_args()
 
     path = Path(args.file)
     if not path.exists():
         raise FileNotFoundError(path)
 
-
-    output_signature = (
-        tf.TensorSpec(shape=(None, 3), dtype=tf.float32),
-        tf.TensorSpec(shape=(), dtype=tf.int32),
-    )
-
     samples = parse_gesture_file(path)
 
+    # Build simple dict of blocks {name: {"acc":..., "fs":...}}
     blocks = {}
-    
     for i, s in enumerate(samples):
         name = s.get("sample_id", f"traj_{i:02d}")
-        acc  = np.asarray(s["data"], dtype=float)
-        fs   = float(s.get("fs", 30.0))
+        acc = np.asarray(s["data"], dtype=float)
+        fs = float(s.get("fs", 30.0))
+
+        # Heuristic unit fix: if |acc| median < 3, assume "g" units -> scale to m/s^2
+        if np.nanmedian(np.linalg.norm(acc, axis=1)) < 3.0:
+            acc = acc * 9.81
+
         blocks[name] = {"acc": acc, "fs": fs}
-    
-    # Now process and plot each trajectory per label
+
+    # Process and plot each trajectory
     for name, item in blocks.items():
         acc = item["acc"]
-        fs  = item["fs"]
-    
-        t = np.arange(len(acc)) / fs
-    
-        # Remove gravity
+        fs = item["fs"]
+
+        # Gravity removal (zero-phase, avoids lag)
         acc_lin, g_est = remove_gravity(acc, fs, fc=args.fc)
 
-        # Integrate
-        v, p = integrate_twice(acc_lin, fs)
-    
-        # Plots
-        plot_trajectory(p, title=f"Trajectory ({name})")
+        # Work only on active window, de-bias per axis
+        acc_act, left, right = trim_stillness(acc_lin, thresh=args.thresh)
+        acc_act = acc_act - np.mean(acc_act, axis=0)
+
+        # Integrate with mild physical constraints
+        v_act, p_act = integrate_twice(
+            acc_act, fs,
+            method=args.method,
+            zero_vel_ends=(not args.no_zupt)
+        )
+
+        plot_trajectory(p_act, title=f"Trajectory ({name})")
 
     plt.show()
 

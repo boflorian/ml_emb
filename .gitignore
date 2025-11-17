@@ -4,3 +4,7 @@ build
 *.DS_store
 
 gesture_recog/models
+gesture_recog/dataset_magic_wand
+gesture_recog/dataset_pico_gestures
+gesture_recog/benchmark_models
+gesture_recog/dataset_magic_wand_gan

@@ -18,7 +18,7 @@ from nn_def import build_cnn
 
 SUBJECTS = list(range(8))  
 CONFIG = dict(
-        win=64, hop=64, lp_window=7, batch_size=32, epochs=100,
+        win=64, hop=64, lp_window=7, batch_size=32, epochs=200,
         num_classes=4, lr=5e-3, l2=6e-3, dropout=0.3, augment=False
     )
 
