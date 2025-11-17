@@ -16,14 +16,14 @@ from torch.utils.data import Dataset, DataLoader
 DATA_ROOT = pathlib.Path("dataset_magic_wand") # original dataset
 OUT_ROOT = pathlib.Path("dataset_magic_wand_gan") # synthetic dataset root
 
-CATEGORIES = ["negative", "ring", "slope", "wave"]  # which categories to use / generate for
+CATEGORIES = ["slope"] # run one categorie at a time 
 
 WIN = 128 # sequence length (time steps)
 N_CHANNELS = 3 # ax, ay, az
 BATCH_SIZE = 64
 LATENT_DIM = 64
 LR_G = 2e-4
-LR_D = 1e-4
+LR_D = 5e-5
 N_STEPS = 2500 
 N_FAKE_SAVE = 50 
 
@@ -157,18 +157,34 @@ class Generator(nn.Module):
             nn.Linear(256, 128 * (win // 4)),
             nn.ReLU(),
         )
-        self.net = nn.Sequential(
+
+        # Conv stack (slightly beefed up)
+        self.conv_block = nn.Sequential(
             nn.ConvTranspose1d(128, 64, kernel_size=4, stride=2, padding=1),
+            nn.ReLU(),
+            nn.Conv1d(64, 64, kernel_size=3, padding=1),
             nn.ReLU(),
             nn.ConvTranspose1d(64, n_channels, kernel_size=4, stride=2, padding=1),
             nn.Tanh(),
         )
 
+        # Learned positional embedding over time (T, feat_dim)
+        # we’ll add it in the final [B, T, C] space
+        self.pos_embed = nn.Parameter(torch.zeros(win, n_channels))
+
+        nn.init.normal_(self.pos_embed, mean=0.0, std=0.1)
+
     def forward(self, z):
-        x = self.fc(z)                            # [B, 128*(win//4)]
-        x = x.view(z.size(0), 128, self.win // 4) # [B, 128, win//4]
-        x = self.net(x)                           # [B, C, win]
-        return x.permute(0, 2, 1)                 # [B, win, C]
+        # z: [B, latent_dim]
+        x = self.fc(z)                            
+        x = x.view(z.size(0), 128, self.win // 4) 
+        x = self.conv_block(x)                    
+        x = x.permute(0, 2, 1)                    
+
+        # Add positional embedding: broadcast [win, C] → [B, win, C]
+        x = x + self.pos_embed.unsqueeze(0)
+
+        return x               
 
 
 class Discriminator(nn.Module):
