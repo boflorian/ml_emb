@@ -2,203 +2,276 @@ import os
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 
 import json
-import csv 
-from pathlib import Path
+import pathlib
 from datetime import datetime
-import pandas as pd 
-import matplotlib.pyplot as plt
+import argparse
+import multiprocessing
+
 import numpy as np
 import tensorflow as tf
-tf.get_logger().setLevel("ERROR")
-import absl.logging
-from termcolor import colored 
+from tensorflow import keras
+from sklearn.metrics import classification_report, confusion_matrix
 
-from data_loader import build_train_test_datasets, _make_ds, lowpass_filter, normalize_clip 
-from nn_def import build_cnn
+from data_loader import (
+    CATEGORIES,
+    _make_ds,
+    iter_samples,
+    segment_windows,
+    lowpass_filter,
+    normalize_clip,
+    build_train_test_datasets,
+)
+from model_definitions.cnn import build_cnn
+from model_definitions.bilstm import build_bilstm_classifier
+from model_definitions.one_d_cnn import build_new_cnn
+from model_definitions.feature_classifier import build_feature_classifier
+from util.feature_extraction import tf_extract_features
+# -----------------------------
+# Global config
+# -----------------------------
+PICO_ROOT = pathlib.Path("dataset_pico_gestures/processed")
+PICO_ROOT = pathlib.Path("dupe_data")
+SUBJECTS = list(range(8))
+MAX_EPOCHS = 800  # Global max epochs setting
 
-SUBJECTS = list(range(8))  
-CONFIG = dict(
-        win=64, hop=64, lp_window=7, batch_size=32, epochs=200,
-        num_classes=4, lr=5e-3, l2=6e-3, dropout=0.3, augment=False
+# Hyperparameters
+WIN_CNN = 64
+HOP_CNN = 64
+LP_WINDOW_CNN = 7
+BATCH_SIZE_CNN = 32
+LR_CNN = 4e-4
+L2_CNN = 6e-3
+DROPOUT_CNN = 0.3
+
+WIN_BILSTM = 64
+HOP_BILSTM = 64
+LP_WINDOW_BILSTM = 5
+BATCH_SIZE_BILSTM = 64
+
+WIN_ONE_D_CNN = 64
+HOP_ONE_D_CNN = 64
+LP_WINDOW_ONE_D_CNN = 7
+BATCH_SIZE_ONE_D_CNN = 16
+LR_ONE_D_CNN = 1e-4
+L2_ONE_D_CNN = 6e-3
+DROPOUT_ONE_D_CNN = 0.3
+
+PATIENCE = 90  # Early stopping patience
+
+CNN_CONFIG = dict(
+    win=WIN_CNN, hop=HOP_CNN, lp_window=LP_WINDOW_CNN, batch_size=BATCH_SIZE_CNN, epochs=MAX_EPOCHS,
+    num_classes=4, lr=LR_CNN, l2=L2_CNN, dropout=DROPOUT_CNN, augment=False
+)
+
+BILSTM_CONFIG = dict(
+    win=WIN_BILSTM, hop=HOP_BILSTM, lp_window=LP_WINDOW_BILSTM, batch_size=BATCH_SIZE_BILSTM, epochs=MAX_EPOCHS,
+    num_classes=4, augment=False
+)
+
+ONE_D_CNN_CONFIG = dict(
+    win=WIN_ONE_D_CNN, hop=HOP_ONE_D_CNN, lp_window=LP_WINDOW_ONE_D_CNN, batch_size=BATCH_SIZE_ONE_D_CNN, epochs=MAX_EPOCHS,
+    num_classes=4, lr=LR_ONE_D_CNN, l2=L2_ONE_D_CNN, dropout=DROPOUT_ONE_D_CNN, augment=True
+)
+
+WIN_FEATURE = 128
+HOP_FEATURE = 64
+LP_WINDOW_FEATURE = 5
+BATCH_SIZE_FEATURE = 64
+HIDDEN_UNITS_FEATURE = [64, 32]
+DROPOUT_FEATURE = 0.3
+
+FEATURE_CONFIG = dict(
+    win=WIN_FEATURE, hop=HOP_FEATURE, lp_window=LP_WINDOW_FEATURE, batch_size=BATCH_SIZE_FEATURE, epochs=MAX_EPOCHS,
+    num_classes=4, hidden_units=HIDDEN_UNITS_FEATURE, dropout=DROPOUT_FEATURE, extract_features=True
+)
+
+
+
+
+
+def find_best_averaged_model(model_name):
+    """Find the averaged model with the best (highest) mean validation accuracy."""
+    model_dir = pathlib.Path("benchmark_models") / model_name
+    if not model_dir.exists():
+        raise FileNotFoundError(f"No models found for {model_name}")
+    run_dirs = list(model_dir.glob("*_cv"))
+    if not run_dirs:
+        raise FileNotFoundError(f"No CV runs found for {model_name}")
+    
+    best_run = None
+    best_mean_acc = -1.0
+    for run_dir in run_dirs:
+        summaries_path = run_dir / "fold_summaries.json"
+        if not summaries_path.exists():
+            continue
+        try:
+            with open(summaries_path, 'r') as f:
+                fold_summaries = json.load(f)
+            val_accs = [s["best_val_accuracy"] for s in fold_summaries]
+            mean_acc = np.mean(val_accs)
+            if mean_acc > best_mean_acc:
+                best_mean_acc = mean_acc
+                best_run = run_dir
+        except (json.JSONDecodeError, KeyError):
+            continue
+    
+    if best_run is None:
+        raise FileNotFoundError(f"No valid fold summaries found for {model_name}")
+    
+    model_path = best_run / "averaged_model.keras"
+    if not model_path.exists():
+        raise FileNotFoundError(f"Averaged model not found in {best_run}")
+    
+    print(f"Selected {model_name} model with mean val acc: {best_mean_acc:.4f} from {best_run.name}")
+    return model_path
+
+
+# -----------------------------
+# Dataset loading for pico
+# -----------------------------
+def _make_pico_ts_ds(subjects=None, batch_size=64, win=128, hop=64, extract_features=False):
+    """
+    Pico dataset as time series (B,T,3) or features (B,30).
+    """
+    output_signature = (
+        tf.TensorSpec(shape=(None, 3), dtype=tf.float32),
+        tf.TensorSpec(shape=(),       dtype=tf.int32),
     )
 
+    def gen():
+        for x, y in iter_samples(subjects, root_dir=PICO_ROOT):
+            yield x, y
+
+    ds = tf.data.Dataset.from_generator(gen, output_signature=output_signature)
+    ds = ds.flat_map(lambda x, y: segment_windows(x, y, win=win, hop=hop, drop_short=False))
+
+    def preprocess(x, y):
+        x = lowpass_filter(x, window=5)
+        x = normalize_clip(x)
+        return x, y
+
+    ds = ds.map(preprocess, num_parallel_calls=tf.data.AUTOTUNE)
+
+    if extract_features:
+        ds = ds.map(lambda x, y: (tf_extract_features(x), y), num_parallel_calls=tf.data.AUTOTUNE)
+    ds = ds.batch(batch_size).prefetch(tf.data.AUTOTUNE)
+    return ds
 
 
-def find_best_model(models_root="models"):
-    """Scan all previous runs and find the one with highest mean val accuracy."""
-    best = None
-    best_path = None
-
-    for sub in Path(models_root).glob("*_cv"):
-        summ = sub / "summary.json"
-        if summ.exists():
-            try:
-                data = json.loads(summ.read_text())
-                acc = data.get("consolidated_mean_accuracy")
-                if acc is not None:
-                    if (best is None) or (acc > best["acc"]):
-                        best = {"acc": acc, "path": sub}
-                        best_path = sub
-            except Exception:
-                continue
-    return best
+def load_pico_timeseries(batch_size=64, win=128, hop=64, extract_features=False):
+    return _make_pico_ts_ds(batch_size=batch_size, win=win, hop=hop, extract_features=extract_features)
 
 
-def plot_training_curves(history, save_path):
-    hist = history.history
-    epochs = range(1, len(hist["loss"]) + 1)
-    plt.figure(figsize=(10, 4))
-    plt.subplot(1, 2, 1)
-    plt.plot(epochs, hist["accuracy"], label="Train Acc")
-    if "val_accuracy" in hist: plt.plot(epochs, hist["val_accuracy"], label="Val Acc")
-    plt.title("Accuracy"); plt.xlabel("Epoch"); plt.ylabel("Accuracy"); plt.legend()
-    plt.subplot(1, 2, 2)
-    plt.plot(epochs, hist["loss"], label="Train Loss")
-    if "val_loss" in hist: plt.plot(epochs, hist["val_loss"], label="Val Loss")
-    plt.title("Loss"); plt.xlabel("Epoch"); plt.ylabel("Loss"); plt.legend()
-    plt.tight_layout(); plt.savefig(save_path); plt.close()
+# -----------------------------
+# Training + evaluation
+# -----------------------------
+def run_cv_for_model(model_name, build_model_fn, cfg):
+    run_id = datetime.now().strftime("%Y%m%d-%H%M%S")
+    run_root = pathlib.Path("benchmark_models") / model_name / f"{run_id}_cv"
+    run_root.mkdir(parents=True, exist_ok=True)
+
+    config = cfg.copy()
+    config["model_name"] = model_name
+    config["class_names"] = CATEGORIES
+    (run_root / "config.json").write_text(json.dumps(config, indent=2))
+
+    fold_summaries = []
+
+    for val_subject in SUBJECTS:
+        print(f"\n=== {model_name} Fold: Val on subject {val_subject} ===")
+        summary = run_one_fold(run_root, val_subject, cfg, build_model_fn)
+        fold_summaries.append(summary)
+
+    # Average weights (weighted by validation accuracy)
+    ckpt_paths = [run_root / f"fold_{s}" / "checkpoints" / "best_valacc.keras" for s in SUBJECTS]
+    val_accs = [s["best_val_accuracy"] for s in fold_summaries]
+    averaged_model = average_weights_from_checkpoints(ckpt_paths, build_model_fn, cfg, weights=val_accs)
+    averaged_model.save(run_root / "averaged_model.keras")
+
+    # Evaluate averaged model on full training set
+    full_train_subjects = SUBJECTS  # all subjects
+    full_train_ds, _ = build_train_test_datasets(
+        train_subjects=full_train_subjects,
+        test_subjects=[],  # no test
+        batch_size=cfg["batch_size"],
+        lp_window=cfg["lp_window"],
+        win=cfg["win"], hop=cfg["hop"],
+        aug_cfg=None,  # no augmentation for evaluation
+        augment=False,
+        extract_features=cfg.get("extract_features", False)
+    )
+    full_train_loss, full_train_acc = averaged_model.evaluate(full_train_ds, verbose=0)
+    full_train_acc = float(full_train_acc)
+
+    # Save fold summaries
+    (run_root / "fold_summaries.json").write_text(json.dumps(fold_summaries, indent=2))
+
+    # Print summary metrics
+    val_accs = [s["best_val_accuracy"] for s in fold_summaries]
+    mean_val_acc = np.mean(val_accs)
+    std_val_acc = np.std(val_accs)
+    print(f"\n{model_name.upper()} CV Summary:")
+    print(f"Mean Val Accuracy: {mean_val_acc:.4f} ± {std_val_acc:.4f}")
+    print(f"Overall Train Accuracy (Averaged Model): {full_train_acc:.4f}")
+    print(f"Individual folds: {val_accs}")
+
+    return averaged_model, run_root
 
 
-def plot_crossval_results(run_root):
-    """Aggregate all fold histories under run_root and plot mean ± std accuracy/loss."""
-    fold_dirs = sorted((run_root).glob("fold_*"))
-    dfs = []
-    for fd in fold_dirs:
-        f = fd / "history.csv"
-        if f.exists():
-            df = pd.read_csv(f)
-            df["fold"] = fd.name
-            dfs.append(df)
-
-    if not dfs:
-        print("No fold histories found for summary plot.")
-        return
-
-    df_all = pd.concat(dfs, ignore_index=True)
-
-    # Some CSVLogger versions use 0-based epoch; keep as-is but sort
-    df_all = df_all.sort_values("epoch")
-
-    # Group by epoch; mean/std will naturally ignore missing folds at later epochs
-    g = df_all.groupby("epoch", as_index=True).agg({
-        "accuracy":      ["mean", "std"],
-        "val_accuracy":  ["mean", "std"],
-        "loss":          ["mean", "std"],
-        "val_loss":      ["mean", "std"],
-    })
-    g.columns = ["_".join(c) for c in g.columns]
-    g = g.sort_index()
-
-    # Use the grouped index as x-axis to avoid shape mismatches
-    epochs = g.index.to_numpy()  # this is 0..N based, can display as is
-
-    plt.figure(figsize=(10, 4))
-
-    # --- Accuracy ---
-    plt.subplot(1, 2, 1)
-    if "accuracy_mean" in g:
-        y = g["accuracy_mean"].to_numpy()
-        ysd = g["accuracy_std"].to_numpy()
-        plt.plot(epochs, y, label="Train acc (mean)")
-        plt.fill_between(epochs, y - ysd, y + ysd, alpha=0.2)
-    if "val_accuracy_mean" in g:
-        yv = g["val_accuracy_mean"].to_numpy()
-        yvsd = g["val_accuracy_std"].to_numpy()
-        plt.plot(epochs, yv, label="Val acc (mean)")
-        plt.fill_between(epochs, yv - yvsd, yv + yvsd, alpha=0.2)
-    plt.title("Cross-validation Accuracy")
-    plt.xlabel("Epoch")
-    plt.ylabel("Accuracy")
-    plt.legend()
-
-    # --- Loss ---
-    plt.subplot(1, 2, 2)
-    if "loss_mean" in g:
-        y = g["loss_mean"].to_numpy()
-        ysd = g["loss_std"].to_numpy()
-        plt.plot(epochs, y, label="Train loss (mean)")
-        plt.fill_between(epochs, y - ysd, y + ysd, alpha=0.2)
-    if "val_loss_mean" in g:
-        yv = g["val_loss_mean"].to_numpy()
-        yvsd = g["val_loss_std"].to_numpy()
-        plt.plot(epochs, yv, label="Val loss (mean)")
-        plt.fill_between(epochs, yv - yvsd, yv + yvsd, alpha=0.2)
-    plt.title("Cross-validation Loss")
-    plt.xlabel("Epoch")
-    plt.ylabel("Loss")
-    plt.legend()
-
-    plt.tight_layout()
-    save_path = run_root / "crossval_summary.png"
-    plt.savefig(save_path)
-    plt.show()
-    plt.close()
-    print(f"Saved cross-validation summary plot: {save_path}")
-
-
-def run_one_fold(run_root, val_subject, cfg, augment=True):
+def run_one_fold(run_root, val_subject, cfg, build_model_fn):
     train_subjects = tuple(s for s in SUBJECTS if s != val_subject)
-    test_subjects  = (val_subject,)  # validate on this person
+    test_subjects  = (val_subject,)  
 
     fold_dir = run_root / f"fold_{val_subject}"
     (fold_dir / "checkpoints").mkdir(parents=True, exist_ok=True)
-    (fold_dir / "tb").mkdir(parents=True, exist_ok=True)
 
     # record fold-specific config
     cfg_fold = dict(cfg)
     cfg_fold["split"] = dict(train_subjects=list(train_subjects), val_subjects=[val_subject])
     (fold_dir / "config.json").write_text(json.dumps(cfg_fold, indent=2))
 
-
-    # augmentation strengths 
+    # augmentation strengths
     aug_cfg = dict(
-	    rot_deg=20.0,
-	    scale_low=0.9, scale_high=1.1,
-	    jitter_std=0.05,
-	    shift_max=8,
-	    time_mask_prob=0.35, time_mask_max_ratio=0.12,
-	    mag_warp_strength=0.15,
-	    time_warp_ratio=0.20,
-	)
-
-
-    # data train uses augment=True internally
+        rot_deg=30.0,  
+        scale_low=0.8, scale_high=1.2,  # wider range
+        jitter_std=0.1,  
+        shift_max=12,  
+        time_mask_prob=0.5, time_mask_max_ratio=0.15,
+        mag_warp_strength=0.2, 
+        time_warp_ratio=0.25, 
+    ) if cfg.get("augment", False) else None # data train uses augment=True internally
     train_ds, val_ds = build_train_test_datasets(
         train_subjects=train_subjects,
         test_subjects=test_subjects,
         batch_size=cfg["batch_size"],
         lp_window=cfg["lp_window"],
-        win=cfg["win"], hop=cfg["hop"], 
+        win=cfg["win"], hop=cfg["hop"],
         aug_cfg=aug_cfg,
-        augment = augment
+        augment=cfg.get("augment", True),
+        extract_features=cfg.get("extract_features", False)
     )
 
-    # model (compile with desired lr, l2/dropout handled inside builder)
-    model = build_cnn(win=cfg["win"],
-                            num_classes=cfg["num_classes"],
-                            lr=float(cfg["lr"]),
-                            l2=cfg.get("l2"),
-                            dropout=cfg.get("dropout", 0.0))
+    # model
+    if cfg.get("extract_features", False):
+        model = build_model_fn(input_dim=30, num_classes=cfg["num_classes"], hidden_units=cfg.get("hidden_units", [64,32]), dropout=cfg.get("dropout", 0.3))
+    elif "lr" in cfg:
+        model = build_model_fn(win=cfg["win"], num_classes=cfg["num_classes"], lr=cfg["lr"], l2=cfg.get("l2"), dropout=cfg.get("dropout"))
+    else:
+        model = build_model_fn(input_shape=(cfg["win"], 3), num_classes=cfg["num_classes"])
 
     # callbacks
-    ckpt_cb = tf.keras.callbacks.ModelCheckpoint(
-        filepath=str(fold_dir / "checkpoints" / "best_valacc.keras"),
+    ckpt_cb = keras.callbacks.ModelCheckpoint(
+        str(fold_dir / "checkpoints" / "best_valacc.keras"),
         monitor="val_accuracy", mode="max", save_best_only=True, verbose=1
     )
-    csv_cb = tf.keras.callbacks.CSVLogger(str(fold_dir / "history.csv"))
-    tb_cb  = tf.keras.callbacks.TensorBoard(log_dir=str(fold_dir / "tb"), write_graph=False)
-    
-
-    # Early Stopping 
-    early_cb = tf.keras.callbacks.EarlyStopping(
+    csv_cb = keras.callbacks.CSVLogger(str(fold_dir / "history.csv"))
+    early_cb = keras.callbacks.EarlyStopping(
         monitor="val_accuracy",
-        mode="max", 
-        patience=25, 
+        mode="max",
+        patience=PATIENCE,
         restore_best_weights=True
     )
-    
-
-    rlr_cb = tf.keras.callbacks.ReduceLROnPlateau(
+    rlr_cb = keras.callbacks.ReduceLROnPlateau(
         monitor="val_loss", factor=0.5, patience=3, min_lr=1e-5, verbose=1
     )
 
@@ -206,13 +279,12 @@ def run_one_fold(run_root, val_subject, cfg, augment=True):
         train_ds,
         validation_data=val_ds,
         epochs=cfg["epochs"],
-        callbacks=[ckpt_cb, csv_cb, tb_cb, early_cb, rlr_cb],
+        callbacks=[ckpt_cb, csv_cb, early_cb, rlr_cb],
         verbose=1
     )
 
     # save artifacts
     model.save(fold_dir / "final.keras")
-    plot_training_curves(history, fold_dir / "training_curves.png")
 
     # summarize metrics for this fold
     best_val_acc = float(max(history.history.get("val_accuracy", [0.0])))
@@ -226,308 +298,303 @@ def run_one_fold(run_root, val_subject, cfg, augment=True):
     return summary
 
 
-# =========== Consolidate CV into one model =============
-def load_fold_checkpoints(run_root):
-    ckpts = []
-    for fd in sorted((run_root).glob("fold_*")):
-        c = fd / "checkpoints" / "best_valacc.keras"
-        if c.exists():
-            ckpts.append(c)
-    return ckpts
+def average_weights_from_checkpoints(ckpt_paths, build_model_fn, cfg, weights=None):
+    """Element-wise weighted average of weights across several checkpoints."""
+    if not all(p.exists() for p in ckpt_paths):
+        raise FileNotFoundError("Some checkpoints missing")
 
-def average_weights_from_checkpoints(ckpt_paths, build_model_fn, build_kwargs):
-    """Element-wise average of weights across several checkpoints."""
-    if not ckpt_paths:
-        raise ValueError("No checkpoints to average.")
+    if weights is None:
+        weights = [1.0] * len(ckpt_paths)
+    else:
+        if len(weights) != len(ckpt_paths):
+            raise ValueError("Weights length must match checkpoints")
+        # Normalize weights to sum to len (for average)
+        total_weight = sum(weights)
+        weights = [w / total_weight * len(weights) for w in weights]
+
     # Build a fresh model to know the weight structure
-    base = build_model_fn(**build_kwargs)
+    if cfg.get("extract_features", False):
+        base = build_model_fn(input_dim=30, num_classes=cfg["num_classes"], hidden_units=cfg.get("hidden_units", [64,32]), dropout=cfg.get("dropout", 0.3))
+    elif "lr" in cfg:
+        base = build_model_fn(win=cfg["win"], num_classes=cfg["num_classes"], lr=cfg["lr"], l2=cfg.get("l2"), dropout=cfg.get("dropout"))
+    else:
+        base = build_model_fn(input_shape=(cfg["win"], 3), num_classes=cfg["num_classes"])
     base_weights = None
-    count = 0
-    for p in ckpt_paths:
-        m = build_model_fn(**build_kwargs)
-        m.load_weights(str(p))
-        ws = m.get_weights()
+    for i, p in enumerate(ckpt_paths):
+        model = keras.models.load_model(p)
         if base_weights is None:
-            base_weights = [w.copy() for w in ws]
+            base_weights = [w.numpy() * weights[i] for w in model.weights]
         else:
-            for i in range(len(ws)):
-                base_weights[i] += ws[i]
-        count += 1
-        tf.keras.backend.clear_session()
+            for j in range(len(base_weights)):
+                base_weights[j] += model.weights[j].numpy() * weights[i]
     # mean
     for i in range(len(base_weights)):
-        base_weights[i] /= float(count)
+        base_weights[i] /= len(ckpt_paths)
     # put into a fresh instance
-    final_model = build_model_fn(**build_kwargs)
+    if cfg.get("extract_features", False):
+        final_model = build_model_fn(input_dim=30, num_classes=cfg["num_classes"], hidden_units=cfg.get("hidden_units", [64,32]), dropout=cfg.get("dropout", 0.3))
+    elif "lr" in cfg:
+        final_model = build_model_fn(win=cfg["win"], num_classes=cfg["num_classes"], lr=cfg["lr"], l2=cfg.get("l2"), dropout=cfg.get("dropout"))
+    else:
+        final_model = build_model_fn(input_shape=(cfg["win"], 3), num_classes=cfg["num_classes"])
     final_model.set_weights(base_weights)
     return final_model
 
 
-SEED = 7
+def evaluate_on_dataset(model, ds, class_names=CATEGORIES, threshold=0.5):
+    print(f"Using confidence threshold: {threshold}")
+    y_true = []
+    y_pred = []
+    max_probs = []
 
-def build_all_data_trainval(
-    subjects, batch_size, lp_window, win, hop,
-    val_mod=10, aug_cfg=None, drop_short=False
-):
-    """
-    Build a combined dataset from all subjects, then deterministically
-    split windows into train/val using enumeration (≈1/val_mod as val).
-    Train uses augmentation; val does not.
-    """
-    # First, build one big (unbatched) dataset of all subjects without augment
-    base = _make_ds(
-        subjects,
-        batch_size=1,          # use 1 so we can enumerate individual windows
-        lp_window=lp_window,
-        win=win, hop=hop,
-        drop_short=drop_short,
-        augment=False,
-        aug_cfg=None
-    ).unbatch()                # ensure we’re at window level
+    for xb, yb in ds:
+        probs = model.predict(xb, verbose=0)
+        preds = []
+        for prob in probs:
+            max_prob = np.max(prob)
+            max_probs.append(max_prob)
+            if max_prob < threshold:
+                pred = 0  # Negative class for low confidence
+            else:
+                pred = np.argmax(prob)
+            preds.append(pred)
+        y_true.append(yb.numpy())
+        y_pred.append(preds)
 
-    enumerated = base.enumerate()  # (index, (x, y))
+    if len(y_true) == 0:
+        print("WARNING: dataset empty")
+        return {}
 
-    val_raw = enumerated.filter(lambda i, xy: tf.equal(tf.math.mod(i, val_mod), 0)).map(lambda i, xy: xy)
-    trn_raw = enumerated.filter(lambda i, xy: tf.not_equal(tf.math.mod(i, val_mod), 0)).map(lambda i, xy: xy)
+    y_true = np.concatenate(y_true)
+    y_pred = np.concatenate(y_pred)
+    max_probs = np.array(max_probs)
 
-    # Apply preprocess functions consistent with your pipeline
-    acfg = aug_cfg or {}
+    acc = float(np.mean(y_true == y_pred))
+    # Diagnostics TODO: remove later or comment out 
+    print(f"Accuracy: {acc:.4f}")
+    print(f"Average max probability: {np.mean(max_probs):.4f}")
+    print(f"Median max probability: {np.median(max_probs):.4f}")
+    print(f"Min max probability: {np.min(max_probs):.4f}")
+    print(f"Max max probability: {np.max(max_probs):.4f}")
 
-    def preprocess_train(x, y):
-        x = lowpass_filter(x, window=lp_window)
-        x = normalize_clip(x)
-        return x, y
+    # Print assigned labels summary
+    unique_preds, counts = np.unique(y_pred, return_counts=True)
+    print("Predicted labels distribution:")
+    for label, count in zip(unique_preds, counts):
+        print(f"  {CATEGORIES[label]}: {count} samples")
 
-    def preprocess_eval(x, y):
-        x = lowpass_filter(x, window=lp_window)
-        x = normalize_clip(x)
-        return x, y
+    # Print sample of true and predicted labels
+    #t 200): {y_true[:200]}")
+    #print(f"Sample pred labels (first 80): {y_pred[:80]}")
 
-    trn = trn_raw.map(preprocess_train, num_parallel_calls=tf.data.AUTOTUNE)
-    val = val_raw.map(preprocess_eval,  num_parallel_calls=tf.data.AUTOTUNE)
+    labels_present = np.unique(np.concatenate([y_true, y_pred])).astype(int)
+    present_names = [class_names[i] for i in labels_present]
 
-    # Batch and prefetch
-    trn = trn.batch(batch_size).prefetch(tf.data.AUTOTUNE)
-    val = val.batch(batch_size).prefetch(tf.data.AUTOTUNE)
+    print("\nClassification report:")
+    print(classification_report(
+        y_true, y_pred,
+        labels=labels_present,
+        target_names=present_names,
+        digits=4,
+        zero_division=0
+    ))
 
-    return trn, val
+    cm = confusion_matrix(y_true, y_pred, labels=np.arange(len(class_names)))
+    print("Confusion matrix:")
+    print(cm)
 
-
-
-def main():
-    print("Initializing LOSO cross-validation...\n")
-
-    config = CONFIG
-    augment = config['augment']
-
-    # run root
-    run_id = datetime.now().strftime("%Y%m%d-%H%M%S") + "_cv"
-    run_root = Path("models") / run_id
-    run_root.mkdir(parents=True, exist_ok=True)
-    (run_root / "config.json").write_text(json.dumps(config, indent=2))
-
-
-    # ---- 1) Run all folds ----------------------------------------------------
-    fold_summaries = []
-    for val_subject in SUBJECTS:
-        print(f"\n=== Fold (val subject = {val_subject}) ===")
-        sum_fold = run_one_fold(run_root, val_subject, config, augment=augment)
-        fold_summaries.append(sum_fold)
-        print(f"Fold {val_subject}: best val acc = {sum_fold['best_val_accuracy']:.4f}")
-
-    # CV aggregate (keep for reference)
-    vals = [s["best_val_accuracy"] for s in fold_summaries]
-    cv_mean = float(np.mean(vals) if vals else 0.0)
-    cv_std  = float(np.std(vals) if vals else 0.0)
-
-    # ---- 2) Consolidate (average) -------------------------------------------
-    print("\nConsolidating into one model...")
-    ckpts = load_fold_checkpoints(run_root)
-    if not ckpts:
-        print("no checkpoints")
-        # Even if no consolidation, still record CV stats
-        agg = dict(
-            folds=[dict(val_subject=s["val_subject"], best_val_accuracy=s["best_val_accuracy"])
-                   for s in fold_summaries],
-            cv_mean_val_accuracy=cv_mean,
-            cv_std_val_accuracy=cv_std,
-            consolidated_model=None,
-            consolidated_mean_accuracy=cv_mean,
-            consolidated_std_accuracy=cv_std,
-        )
-        (run_root / "summary.json").write_text(json.dumps(agg, indent=2))
-        with open(run_root / "summary.csv", "w", newline="") as f:
-            w = csv.writer(f)
-            w.writerow(["val_subject", "best_val_accuracy"])
-            for s in fold_summaries:
-                w.writerow([s["val_subject"], f"{s['best_val_accuracy']:.6f}"])
-            w.writerow(["cv_mean", f"{cv_mean:.6f}"])
-            w.writerow(["cv_std",  f"{cv_std:.6f}"])
-            w.writerow(["consolidated_model", "N/A"])
-            w.writerow(["consolidated_mean_accuracy", f"{cv_mean:.6f}"])
-            w.writerow(["consolidated_std_accuracy",  f"{cv_std:.6f}"])
-
-        print("\n=== Cross-validation complete ===")
-        print(f"CV mean val acc: {cv_mean:.4f}  (std: {cv_std:.4f})")
-        print(f"Artifacts saved to: {run_root.resolve()}")
-        plot_crossval_results(run_root)
-        return
-
-    build_kwargs = dict(
-        win=config["win"],
-        num_classes=config["num_classes"],
-        lr=float(config["lr"]),
-        l2=config.get("l2"),
-        dropout=config.get("dropout", 0.0),
-    )
-
-    print("\nAveraging fold checkpoints...")
-    avg_model = average_weights_from_checkpoints(
-        ckpt_paths=ckpts,
-        build_model_fn=build_cnn,
-        build_kwargs=build_kwargs
-    )
-    (run_root / "final").mkdir(exist_ok=True, parents=True)
-    avg_path = run_root / "final" / "averaged_folds.keras"
-    avg_model.save(avg_path)
-    print(f"Saved averaged model: {avg_path.resolve()}")
-
-    # ---- 3) Refit on ALL subjects using averaged init -----------------------
-    refit_aug_cfg = dict(
-        rot_deg=10.0,
-        scale_low=0.95, scale_high=1.05,
-        jitter_std=0.02,
-        shift_max=4,
-        time_mask_prob=0.20, time_mask_max_ratio=0.08,
-        mag_warp_strength=0.10,
-        time_warp_ratio=0.10,
-    )
-
-    refit_train_ds, refit_val_ds = build_all_data_trainval(
-        subjects=tuple(SUBJECTS),
-        batch_size=CONFIG["batch_size"],
-        lp_window=CONFIG["lp_window"],
-        win=CONFIG["win"], hop=CONFIG["hop"],
-        val_mod=10,
-        aug_cfg=refit_aug_cfg,
-        drop_short=False
-    )
-
-    refit_model = build_cnn(
-        win=CONFIG["win"],
-        num_classes=CONFIG["num_classes"],
-        lr=min(3e-4, float(CONFIG["lr"]) * 0.3),
-        l2=CONFIG.get("l2"),
-        dropout=CONFIG.get("dropout", 0.0),
-    )
-    refit_model.set_weights(avg_model.get_weights())
-
-    refit_ckpt = run_root / "final" / "final.keras"
-    refit_callbacks = [
-        tf.keras.callbacks.ModelCheckpoint(
-            filepath=str(refit_ckpt), monitor="val_accuracy",
-            mode="max", save_best_only=True, verbose=1
-        ),
-        tf.keras.callbacks.EarlyStopping(
-            monitor="val_accuracy", mode="max",
-            patience=10, restore_best_weights=True
-        ),
-        tf.keras.callbacks.ReduceLROnPlateau(
-            monitor="val_loss", factor=0.5, patience=3, min_lr=1e-6, verbose=1
-        ),
-        tf.keras.callbacks.CSVLogger(str(run_root / "final" / "refit_history.csv"))
-    ]
-
-    print("\nRefitting on ALL subjects...")
-    refit_model.fit(
-        refit_train_ds,
-        validation_data=refit_val_ds,
-        epochs=max(50, min(30, CONFIG["epochs"] // 2)),
-        callbacks=refit_callbacks,
-        verbose=1
-    )
-
-    # ---- 4) Evaluate consolidated model AFTER it exists ---------------------
-    final_refit = run_root / "final" / "final.keras"
-    final_avg   = run_root / "final" / "averaged_folds.keras"
+    return {
+        "accuracy": acc,
+        "confusion_matrix": cm.tolist(),
+    }
 
 
-    cons_tag = None
-    cons_mean = None
-    cons_std = None
-
-    if final_refit.exists() or final_avg.exists():
-        model_path = final_refit if final_refit.exists() else final_avg
-        cons_tag = model_path.name
-        model = tf.keras.models.load_model(model_path)
-
-        accs = []
-        for s in SUBJECTS:
-            _, test_ds = build_train_test_datasets(
-                train_subjects=tuple(x for x in SUBJECTS if x != s),
-                test_subjects=(s,),
-                batch_size=CONFIG["batch_size"],
-                lp_window=CONFIG["lp_window"],
-                win=CONFIG["win"], hop=CONFIG["hop"],
-                aug_cfg=None  # no aug for eval
-            )
-            res = model.evaluate(test_ds, verbose=0)
-            acc = res[1] if isinstance(res, (list, tuple)) and len(res) > 1 else float(res)
-            accs.append(float(acc))
-        cons_mean = float(np.mean(accs))
-        cons_std  = float(np.std(accs))
-        print(f"\nConsolidated model ({cons_tag}) LOSO mean acc: {cons_mean:.4f} (std {cons_std:.4f})")
+def run_pico_inference(model, run_root, model_name):
+    # Use appropriate window size for each model
+    if model_name in ["cnn", "one_d_cnn"]:
+        win, hop = WIN_CNN, HOP_CNN
+        extract_features = False
+    elif model_name == "bilstm":
+        win, hop = WIN_BILSTM, HOP_BILSTM
+        extract_features = False
+    elif model_name == "feature":
+        win, hop = WIN_FEATURE, HOP_FEATURE
+        extract_features = True
     else:
-        print("\n[Warn] No consolidated model found after refit/average.")
-
-    # ---- 5) Persist summary (JSON + CSV) ------------------------------------
-    agg = dict(
-        folds=[dict(val_subject=s["val_subject"], best_val_accuracy=s["best_val_accuracy"])
-               for s in fold_summaries],
-        cv_mean_val_accuracy=cv_mean,
-        cv_std_val_accuracy=cv_std,
-        consolidated_model=cons_tag,  # 'refit_all.keras' or 'averaged_folds.keras'
-        consolidated_mean_accuracy=(cons_mean if cons_mean is not None else cv_mean),
-        consolidated_std_accuracy=(cons_std if cons_std is not None else cv_std),
-    )
-    (run_root / "summary.json").write_text(json.dumps(agg, indent=2))
-
-    with open(run_root / "summary.csv", "w", newline="") as f:
-        w = csv.writer(f)
-        w.writerow(["val_subject", "best_val_accuracy"])
-        for s in fold_summaries:
-            w.writerow([s["val_subject"], f"{s['best_val_accuracy']:.6f}"])
-        w.writerow(["cv_mean", f"{cv_mean:.6f}"])
-        w.writerow(["cv_std",  f"{cv_std:.6f}"])
-        w.writerow(["consolidated_model", cons_tag or "N/A"])
-        w.writerow(["consolidated_mean_accuracy", f"{(cons_mean if cons_mean is not None else cv_mean):.6f}"])
-        w.writerow(["consolidated_std_accuracy",  f"{(cons_std  if cons_std  is not None else cv_std):.6f}"])
-
-    # ---- 6) Human-readable prints + comparison ------------------------------
-    print("\n=== Cross-validation complete ===")
-    print(f"CV mean val acc: {cv_mean:.4f}  (std: {cv_std:.4f})")
-    if cons_mean is not None:
-        print(f"Consolidated model mean acc: {cons_mean:.4f}  (std: {cons_std:.4f})")
-    print(f"Artifacts saved to: {run_root.resolve()}")
-
-    # Compare to historical best (proxy: previous CV mean)
-    best = find_best_model('models')
-    if best:
-        current_acc = (cons_mean if cons_mean is not None else cv_mean)
-        print("\n=== Model comparison ===")
-        print(f"Current run:  {current_acc:.4f}  ({run_root.name})")
-        print(f"Best overall (CV mean proxy): {best['acc']:.4f}  ({best['path'].name})")
-        if current_acc < best["acc"]:
-            print(colored("→ Current model is not the best; keep best checkpoint from:", "red"))
-            print(f"   {best['path'].resolve()}")
-        else:
-            print(colored("→ This model achieved the best accuracy so far (vs CV-best proxy)!", "green"))
-    else:
-        print("No previous summary.json files found — this is the first recorded run.")
-
+        raise ValueError(f"Unknown model_name: {model_name}")
     
-    #plot_crossval_results(run_root)
+    pico_ds = load_pico_timeseries(batch_size=64, win=win, hop=hop, extract_features=extract_features)
+
+    metrics = evaluate_on_dataset(model, pico_ds, class_names=CATEGORIES, threshold=0.4)
+    (run_root / f"metrics_pico_{model_name}.json").write_text(json.dumps(metrics, indent=2))
 
 
-if __name__ == '__main__':
-    main()
+def train_single_model(model_item):
+    """Helper function for parallel training."""
+    model_name, model_info = model_item
+    print(f"\n=== Training {model_name.upper()} with CV ===")
+    model, run_root = run_cv_for_model(model_name, model_info['build_fn'], model_info['config'])
+    # Collect CV summary
+    summaries_path = run_root / "fold_summaries.json"
+    cv_summary = None
+    if summaries_path.exists():
+        with open(summaries_path, 'r') as f:
+            fold_summaries = json.load(f)
+        val_accs = [s["best_val_accuracy"] for s in fold_summaries]
+        mean_val_acc = np.mean(val_accs)
+        std_val_acc = np.std(val_accs)
+        cv_summary = {
+            "mean_val_acc": mean_val_acc,
+            "std_val_acc": std_val_acc,
+            "individual_folds": val_accs
+        }
+    return model_name, model, run_root, cv_summary
+
+
+# -----------------------------
+# Main
+# -----------------------------
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Train and/or evaluate CNN and BiLSTM models on gesture recognition.")
+    parser.add_argument("--mode", choices=["train", "inference", "both"], default="both",
+                        help="Mode: train (CV training only), inference (pico evaluation only), both (default)")
+    parser.add_argument("--models", nargs='*', default=['cnn', 'bilstm', 'one_d_cnn', 'feature'],
+                        help="Models to train/infer: cnn, bilstm, one_d_cnn, feature (default all)")
+    parser.add_argument("--parallel", action="store_true",
+                        help="Train multiple models in parallel using multiprocessing")
+    args = parser.parse_args()
+
+    # Define available models
+    available_models = {
+        'cnn': {'build_fn': build_cnn, 'config': CNN_CONFIG},
+        'bilstm': {'build_fn': build_bilstm_classifier, 'config': BILSTM_CONFIG},
+        'one_d_cnn': {'build_fn': build_new_cnn, 'config': ONE_D_CNN_CONFIG},
+        'feature': {'build_fn': build_feature_classifier, 'config': FEATURE_CONFIG}
+    }
+
+    # Filter to selected models
+    selected_models = {name: available_models[name] for name in args.models if name in available_models}
+    if not selected_models:
+        raise ValueError("No valid models selected")
+
+    # Initialize model variables
+    models = {}
+    run_roots = {}
+    cv_summaries = {}
+    pico_accuracies = {}
+
+    if args.mode in ["train", "both"]:
+        if args.parallel:
+            num_processes = min(multiprocessing.cpu_count(), len(selected_models))
+            print(f"Training {len(selected_models)} models in parallel using {num_processes} processes...")
+            with multiprocessing.Pool(processes=num_processes) as pool:
+                results = pool.map(train_single_model, selected_models.items())
+            for model_name, model, run_root, cv_summary in results:
+                models[model_name] = model
+                run_roots[model_name] = run_root
+                if cv_summary:
+                    cv_summaries[model_name] = cv_summary
+        else:
+            for model_name, model_info in selected_models.items():
+                print(f"\n=== Training {model_name.upper()} with CV ===")
+                model, run_root = run_cv_for_model(model_name, model_info['build_fn'], model_info['config'])
+                models[model_name] = model
+                run_roots[model_name] = run_root
+                # Collect CV summary
+                summaries_path = run_root / "fold_summaries.json"
+                if summaries_path.exists():
+                    with open(summaries_path, 'r') as f:
+                        fold_summaries = json.load(f)
+                    val_accs = [s["best_val_accuracy"] for s in fold_summaries]
+                    mean_val_acc = np.mean(val_accs)
+                    std_val_acc = np.std(val_accs)
+                    cv_summaries[model_name] = {
+                        "mean_val_acc": mean_val_acc,
+                        "std_val_acc": std_val_acc,
+                        "individual_folds": val_accs
+                    }
+
+    if args.mode in ["inference", "both"]:
+        for model_name in selected_models:
+            if model_name not in models:
+                print(f"\n=== Loading best {model_name.upper()} model ===")
+                model_path = find_best_averaged_model(model_name)
+                model = keras.models.load_model(model_path)
+                run_root = model_path.parent
+                models[model_name] = model
+                run_roots[model_name] = run_root
+                print(f"Loaded {model_name.upper()} from {model_path}")
+
+        for model_name in selected_models:
+            print(f"\n=== Evaluating {model_name.upper()} on Pico dataset ===")
+            run_pico_inference(models[model_name], run_roots[model_name], model_name)
+
+        # Collect pico accuracies
+        for model_name in selected_models:
+            metrics_path = run_roots[model_name] / f"metrics_pico_{model_name}.json"
+            if metrics_path.exists():
+                with open(metrics_path, 'r') as f:
+                    metrics = json.load(f)
+                pico_accuracies[model_name] = metrics.get('accuracy', None)
+
+    # Print final summary if multiple models
+    if len(selected_models) > 1:
+        print("\n" + "="*50)
+        print("FINAL SUMMARY - Multiple Models Comparison")
+        print("="*50)
+        print(f"{'Model':<12} {'CV Mean Val Acc':<15} {'Pico Acc':<10}")
+        print("-"*40)
+        for model_name in selected_models:
+            cv_acc = f"{cv_summaries.get(model_name, {}).get('mean_val_acc', 'N/A'):.4f}" if model_name in cv_summaries else "N/A"
+            pico_acc = f"{pico_accuracies.get(model_name, 'N/A'):.4f}" if model_name in pico_accuracies else "N/A"
+            print(f"{model_name.upper():<12} {cv_acc:<15} {pico_acc:<10}")
+        print("="*50)
+
+    # Log all metrics and hyperparameters
+    logs_dir = pathlib.Path("logs")
+    logs_dir.mkdir(exist_ok=True)
+    log_file = logs_dir / "training_log.json"
+    
+    # Load existing log if exists
+    if log_file.exists():
+        with open(log_file, 'r') as f:
+            log_data = json.load(f)
+    else:
+        log_data = []
+    
+    # Create log entry
+    log_entry = {
+        "timestamp": datetime.now().isoformat(),
+        "mode": args.mode,
+        "models": list(selected_models.keys()),
+        "parallel": args.parallel,
+    }
+    
+    for model_name in selected_models:
+        model_log = {
+            "model_name": model_name,
+            "hyperparameters": selected_models[model_name]['config'],
+        }
+        if model_name in cv_summaries:
+            model_log["cv_metrics"] = cv_summaries[model_name]
+        if model_name in pico_accuracies:
+            model_log["pico_accuracy"] = pico_accuracies[model_name]
+        log_entry[model_name] = model_log
+    
+    log_data.append(log_entry)
+    
+    # Save log
+    with open(log_file, 'w') as f:
+        json.dump(log_data, f, indent=2)
+    
+    print(f"\nLogged run to {log_file}")
+
+    if args.mode == "train":
+        for model_name in selected_models:
+            print(f"\n{model_name.upper()} results saved to: {run_roots[model_name].resolve()}")
+    elif args.mode == "inference":
+        for model_name in selected_models:
+            print(f"\n{model_name.upper()} metrics saved to: {run_roots[model_name].resolve()}")
+    else:
+        for model_name in selected_models:
+            print(f"\n{model_name.upper()} results saved to: {run_roots[model_name].resolve()}")

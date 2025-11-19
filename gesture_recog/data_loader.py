@@ -5,6 +5,7 @@ import re
 import numpy as np
 import tensorflow as tf
 from augmentation import *
+from util.feature_extraction import tf_extract_features
 
 ROOT = pathlib.Path('dataset_magic_wand')
 CATEGORIES = ["negative", "ring", "slope", "wing"]
@@ -124,7 +125,8 @@ def normalize_clip(x):
 def _make_ds(subjects, batch_size, lp_window=5,
              win=None, hop=None, drop_short=False,
              augment=False,
-             aug_cfg=None):
+             aug_cfg=None,
+             extract_features=False):
     
     output_signature = (
         tf.TensorSpec(shape=(None, 3), dtype=tf.float32),
@@ -152,6 +154,9 @@ def _make_ds(subjects, batch_size, lp_window=5,
     ds = ds.map(preprocess_train if augment else preprocess_eval,
                 num_parallel_calls=tf.data.AUTOTUNE)
 
+    if extract_features:
+        ds = ds.map(lambda x, y: (tf_extract_features(x), y), num_parallel_calls=tf.data.AUTOTUNE)
+
     ds = ds.shuffle(5000, reshuffle_each_iteration=True)
 
     if win is not None and hop is not None:
@@ -171,10 +176,11 @@ def build_train_test_datasets(
     batch_size=64,
     lp_window=5,
     win=None, hop=None, drop_short=False, aug_cfg=None, 
-    augment=True
+    augment=True,
+    extract_features=False
 ):
     train_ds = _make_ds(train_subjects, batch_size, lp_window,
-                        win, hop, drop_short, augment=augment, aug_cfg=aug_cfg)
+                        win, hop, drop_short, augment=augment, aug_cfg=aug_cfg, extract_features=extract_features)
     test_ds  = _make_ds(test_subjects,  batch_size, lp_window,
-                        win, hop, drop_short, augment=False, aug_cfg=None)
+                        win, hop, drop_short, augment=False, aug_cfg=None, extract_features=extract_features)
     return train_ds, test_ds

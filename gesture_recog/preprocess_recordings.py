@@ -40,8 +40,8 @@ def preprocess_session1(x_raw, swap_axes=True, flip_y=True,
 
         x = x[::decim]
 
-    # → No normalization. Just round/clip to two decimals.
-    x = np.round(x, 2)
+    # → No normalization. Just round/clip to six decimals for more precision.
+    x = np.round(x, 6)
     return x
 def parse_gesture_file(path: Path):
     """
@@ -76,7 +76,7 @@ def write_processed_file(out_path: Path, samples):
         for i, s in enumerate(samples, start=1):
             f.write(f"sample{i}\n")
             f.write("ax,ay,az\n")
-            np.savetxt(f, s, fmt="%.2f", delimiter=",")  # two decimals
+            np.savetxt(f, s, fmt="%.6f", delimiter=",")  # six decimals
             f.write("\n")
 
 def main():
@@ -98,7 +98,7 @@ def main():
     args = p.parse_args()
 
     raw_dir = args.root / "raw"
-    out_root = args.root / "processed"
+    out_root = args.root / "processed2"
     if not raw_dir.is_dir():
         raise SystemExit(f"Missing folder: {raw_dir}")
 

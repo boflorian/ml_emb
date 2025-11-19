@@ -3,10 +3,8 @@ from tensorflow import keras
 from tensorflow.keras import layers
 from sklearn.metrics import classification_report, confusion_matrix
 
-from bilstm import build_bilstm_classifier
 
-
-def build_bilstm_classifier(input_shape=(WIN, 3), num_classes=NUM_CLASSES):
+def build_bilstm_classifier(input_shape=(128, 3), num_classes=4):
     """
     Simple BiLSTM classifier for IMU (T, 3).
     """
