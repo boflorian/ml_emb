@@ -15,12 +15,10 @@ from data_loader import (
     normalize_clip,
 )
 
-# Paths
 MAGIC_WAND_ROOT = pathlib.Path("dataset_magic_wand")
 PICO_ROOT = pathlib.Path("dataset_pico_gestures/processed")  
 
-# Preprocessing params (match main.py)
-LP_WINDOW = 5
+LP_WINDOW = 1  # Set to 1 to disable lowpass for raw comparison
 
 def load_and_preprocess_sample(sample_iter, num_samples=5, selected_classes=None):
     """Load and preprocess a few samples from the iterator, filtered by classes."""
@@ -44,7 +42,7 @@ def load_and_preprocess_sample(sample_iter, num_samples=5, selected_classes=None
 
 def plot_signals(magic_samples, magic_labels, pico_samples, pico_labels, categories=CATEGORIES):
     """Plot the signals for both datasets in one figure."""
-    num_samples = min(len(magic_samples), len(pico_samples), 4)  # up to 4 per dataset
+    num_samples = min(len(magic_samples), len(pico_samples), 4)  
     fig, axes = plt.subplots(2, num_samples, figsize=(4*num_samples, 8), sharex=True)
     fig.suptitle("Magic Wand vs Pico Dataset Signals Comparison")
 
