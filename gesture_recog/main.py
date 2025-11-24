@@ -14,17 +14,18 @@ import tensorflow as tf
 from tensorflow import keras
 from sklearn.metrics import classification_report, confusion_matrix
 
-from ml_emb.gesture_recog.util.data_loader import (
+from util.data_loader import (
     CATEGORIES,
     iter_samples,
     segment_windows,
     lowpass_filter,
     normalize_clip,
     build_train_test_datasets,
+    list_available_subjects
 )
 from model_definitions.cnn import build_cnn
 from model_definitions.bilstm import build_bilstm_classifier
-from model_definitions.one_d_cnn import build_new_cnn
+from model_definitions.one_d_cnn import build_oned_cnn
 from model_definitions.feature_classifier import build_feature_classifier
 from model_definitions.deep_cnn import build_deep_cnn
 from util.feature_extraction import tf_extract_features
@@ -32,8 +33,10 @@ from util.feature_extraction import tf_extract_features
 # Global config
 # -----------------------------
 PICO_ROOT = pathlib.Path("dataset_pico_gestures/processed")
+MAGIC_WAND_ROOT = pathlib.Path("dataset_magic_wand")
 
-SUBJECTS = list(range(8))
+SUBJECTS = list(range(8))  #careful, hardcoded, breaks on pico dataset
+
 MAX_EPOCHS = 800  # Global max epochs setting
 # ==============================
 #  Hyperparameters
@@ -103,7 +106,7 @@ DEEP_CNN_CONFIG = dict(
     num_classes=4, lr=LR_DEEP_CNN, l2=L2_DEEP_CNN, dropout=DROPOUT_DEEP_CNN, augment=True
 )
 
-# -----------------------------
+# -------------------------------------
 
 
 def find_best_averaged_model(model_name):
@@ -179,9 +182,9 @@ def find_best_pico_model(model_name):
     return model_path
 
 
-# -----------------------------
+# ----------------------------------------
 # Dataset loading for pico
-# -----------------------------
+# ----------------------------------------
 def _make_pico_ts_ds(subjects=None, batch_size=64, win=128, hop=64, extract_features=False):
     """
     Pico dataset as time series (B,T,3) or features (B,30).
@@ -445,6 +448,19 @@ def run_one_fold(run_root, val_subject, cfg, build_model_fn):
         extract_features=cfg.get("extract_features", False)
     )
 
+    train_card = tf.data.experimental.cardinality(train_ds).numpy()
+    val_card = tf.data.experimental.cardinality(val_ds).numpy()
+
+    if train_card == 0:
+        print(f"[WARN] No training data for fold with val_subject={val_subject}. Skipping this fold.")
+        summary = dict(
+            val_subject=val_subject,
+            best_val_accuracy=0.0,
+            last_epoch_metrics={}
+        )
+        (fold_dir / "summary.json").write_text(json.dumps(summary, indent=2))
+        return summary
+
     # model
     if cfg.get("extract_features", False):
         model = build_model_fn(input_dim=30, num_classes=cfg["num_classes"], hidden_units=cfg.get("hidden_units", [64,32]), dropout=cfg.get("dropout", 0.3))
@@ -703,7 +719,7 @@ if __name__ == "__main__":
     available_models = {
         'cnn': {'build_fn': build_cnn, 'config': CNN_CONFIG},
         'bilstm': {'build_fn': build_bilstm_classifier, 'config': BILSTM_CONFIG},
-        'one_d_cnn': {'build_fn': build_new_cnn, 'config': ONE_D_CNN_CONFIG},
+        'one_d_cnn': {'build_fn': build_oned_cnn, 'config': ONE_D_CNN_CONFIG},
         'feature': {'build_fn': build_feature_classifier, 'config': FEATURE_CONFIG},
         'deep_cnn': {'build_fn': build_deep_cnn, 'config': DEEP_CNN_CONFIG}
     }
