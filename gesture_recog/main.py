@@ -239,7 +239,18 @@ def run_cv_for_model(model_name, build_model_fn, cfg):
     ckpt_paths = [run_root / f"fold_{s}" / "checkpoints" / "best_valacc.keras" for s in SUBJECTS]
     val_accs = [s["best_val_accuracy"] for s in fold_summaries]
     averaged_model = average_weights_from_checkpoints(ckpt_paths, build_model_fn, cfg, weights=val_accs)
-    averaged_model.save(run_root / "averaged_model.keras")
+
+    # Save .keras
+    keras_path = run_root / "averaged_model.keras"
+    averaged_model.save(keras_path)
+
+    # Save SavedModel (format should be preferable for TFLite conversion)
+    savedmodel_dir = run_root / "averaged_model_savedmodel"
+    if hasattr(averaged_model, "export"):
+        averaged_model.export(savedmodel_dir.as_posix())
+    else:
+        import tensorflow as tf
+        tf.saved_model.save(averaged_model, savedmodel_dir.as_posix())
 
     # Evaluate averaged model on full training set
     full_train_subjects = SUBJECTS  # all subjects
