@@ -8,3 +8,6 @@ gesture_recog/dataset_magic_wand
 gesture_recog/dataset_pico_gestures
 gesture_recog/benchmark_models
 gesture_recog/dataset_magic_wand_gan
+gesture_recog/dupe_data
+gesture_recog/logs
+gesture_recog/__pycache__

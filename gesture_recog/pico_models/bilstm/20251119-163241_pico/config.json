@@ -1,0 +1,19 @@
+{
+  "win": 64,
+  "hop": 64,
+  "lp_window": 5,
+  "batch_size": 32,
+  "epochs": 800,
+  "num_classes": 4,
+  "lr": 0.0005,
+  "l2": 0.0001,
+  "augment": true,
+  "model_name": "bilstm",
+  "class_names": [
+    "negative",
+    "ring",
+    "slope",
+    "wing"
+  ],
+  "dataset": "pico"
+}

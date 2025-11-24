@@ -10,11 +10,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
 tf.get_logger().setLevel("ERROR")
-import absl.logging
-from termcolor import colored 
+from termcolor import colored
 
-from data_loader import build_train_test_datasets, _make_ds, lowpass_filter, normalize_clip 
-from nn_def import build_cnn
+from ml_emb.gesture_recog.util.data_loader import build_train_test_datasets, _make_ds, lowpass_filter, normalize_clip
+from ml_emb.gesture_recog.model_definitions.nn_def import build_cnn
 
 SUBJECTS = list(range(8))  
 CONFIG = dict(

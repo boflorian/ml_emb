@@ -14,9 +14,8 @@ import tensorflow as tf
 from tensorflow import keras
 from sklearn.metrics import classification_report, confusion_matrix
 
-from data_loader import (
+from ml_emb.gesture_recog.util.data_loader import (
     CATEGORIES,
-    _make_ds,
     iter_samples,
     segment_windows,
     lowpass_filter,
@@ -27,48 +26,51 @@ from model_definitions.cnn import build_cnn
 from model_definitions.bilstm import build_bilstm_classifier
 from model_definitions.one_d_cnn import build_new_cnn
 from model_definitions.feature_classifier import build_feature_classifier
+from model_definitions.deep_cnn import build_deep_cnn
 from util.feature_extraction import tf_extract_features
 # -----------------------------
 # Global config
 # -----------------------------
 PICO_ROOT = pathlib.Path("dataset_pico_gestures/processed")
-PICO_ROOT = pathlib.Path("dupe_data")
-SUBJECTS = list(range(8))
-MAX_EPOCHS = 500  # Global max epochs setting
 
-# Hyperparameters
+SUBJECTS = list(range(8))
+MAX_EPOCHS = 800  # Global max epochs setting
+# ==============================
+#  Hyperparameters
+# =============================
 WIN_CNN = 64
 HOP_CNN = 64
 LP_WINDOW_CNN = 7
-BATCH_SIZE_CNN = 32
-LR_CNN = 1e-4
-L2_CNN = 1e-3
-DROPOUT_CNN = 0.4
+BATCH_SIZE_CNN = 64 
+LR_CNN = 5e-4  
+L2_CNN = 1e-4  
+DROPOUT_CNN = 0.3  
 
 WIN_BILSTM = 64
 HOP_BILSTM = 64
 LP_WINDOW_BILSTM = 5
-BATCH_SIZE_BILSTM = 16
-LR_BILSTM = 1e-4
+BATCH_SIZE_BILSTM = 32  
+LR_BILSTM = 5e-4  
+L2_BILSTM = 1e-4  
 
 WIN_ONE_D_CNN = 64
 HOP_ONE_D_CNN = 64
 LP_WINDOW_ONE_D_CNN = 7
-BATCH_SIZE_ONE_D_CNN = 32
-LR_ONE_D_CNN = 5e-5
-L2_ONE_D_CNN = 1e-3
-DROPOUT_ONE_D_CNN = 0.2
+BATCH_SIZE_ONE_D_CNN = 16  
+LR_ONE_D_CNN = 0.0001
+L2_ONE_D_CNN = 0.004  
+DROPOUT_ONE_D_CNN = 0.25  
 
-PATIENCE = 90  # Early stopping patience
+PATIENCE = 200  
 
 CNN_CONFIG = dict(
     win=WIN_CNN, hop=HOP_CNN, lp_window=LP_WINDOW_CNN, batch_size=BATCH_SIZE_CNN, epochs=MAX_EPOCHS,
-    num_classes=4, lr=LR_CNN, l2=L2_CNN, dropout=DROPOUT_CNN, augment=False
+    num_classes=4, lr=LR_CNN, l2=L2_CNN, dropout=DROPOUT_CNN, augment=True 
 )
 
 BILSTM_CONFIG = dict(
     win=WIN_BILSTM, hop=HOP_BILSTM, lp_window=LP_WINDOW_BILSTM, batch_size=BATCH_SIZE_BILSTM, epochs=MAX_EPOCHS,
-    num_classes=4, augment=False
+    num_classes=4, lr=LR_BILSTM, l2=L2_BILSTM, augment=True  
 )
 
 ONE_D_CNN_CONFIG = dict(
@@ -80,16 +82,28 @@ WIN_FEATURE = 128
 HOP_FEATURE = 64
 LP_WINDOW_FEATURE = 5
 BATCH_SIZE_FEATURE = 64
-HIDDEN_UNITS_FEATURE = [64, 32]
+HIDDEN_UNITS_FEATURE = [128, 64, 32]  # Deeper network
 DROPOUT_FEATURE = 0.3
+
+WIN_DEEP_CNN = 64
+HOP_DEEP_CNN = 64
+LP_WINDOW_DEEP_CNN = 7
+BATCH_SIZE_DEEP_CNN = 16  # Smaller batch size for stability
+LR_DEEP_CNN = 5e-5  # Lower learning rate for deep network
+L2_DEEP_CNN = 1e-3  # Higher regularization
+DROPOUT_DEEP_CNN = 0.4  # Higher dropout
 
 FEATURE_CONFIG = dict(
     win=WIN_FEATURE, hop=HOP_FEATURE, lp_window=LP_WINDOW_FEATURE, batch_size=BATCH_SIZE_FEATURE, epochs=MAX_EPOCHS,
-    num_classes=4, hidden_units=HIDDEN_UNITS_FEATURE, dropout=DROPOUT_FEATURE, extract_features=True
+    num_classes=4, hidden_units=HIDDEN_UNITS_FEATURE, dropout=DROPOUT_FEATURE, extract_features=True, augment=True 
 )
 
+DEEP_CNN_CONFIG = dict(
+    win=WIN_DEEP_CNN, hop=HOP_DEEP_CNN, lp_window=LP_WINDOW_DEEP_CNN, batch_size=BATCH_SIZE_DEEP_CNN, epochs=1000,
+    num_classes=4, lr=LR_DEEP_CNN, l2=L2_DEEP_CNN, dropout=DROPOUT_DEEP_CNN, augment=True
+)
 
-
+# -----------------------------
 
 
 def find_best_averaged_model(model_name):
@@ -292,9 +306,9 @@ def run_pico_training(model_name, build_model_fn, cfg):
         model = build_model_fn(input_dim=30, num_classes=cfg["num_classes"],
                               hidden_units=cfg.get("hidden_units", [64,32]),
                               dropout=cfg.get("dropout", 0.3))
-    elif "lr" in cfg:
+    elif "lr" in cfg and "l2" in cfg:
         model = build_model_fn(win=cfg["win"], num_classes=cfg["num_classes"],
-                              lr=cfg["lr"], l2=cfg.get("l2"), dropout=cfg.get("dropout"))
+                              lr=cfg["lr"], l2=cfg["l2"])
     else:
         model = build_model_fn(input_shape=(cfg["win"], 3), num_classes=cfg["num_classes"])
 
@@ -423,8 +437,12 @@ def run_one_fold(run_root, val_subject, cfg, build_model_fn):
     # model
     if cfg.get("extract_features", False):
         model = build_model_fn(input_dim=30, num_classes=cfg["num_classes"], hidden_units=cfg.get("hidden_units", [64,32]), dropout=cfg.get("dropout", 0.3))
-    elif "lr" in cfg:
-        model = build_model_fn(win=cfg["win"], num_classes=cfg["num_classes"], lr=cfg["lr"], l2=cfg.get("l2"), dropout=cfg.get("dropout"))
+    elif model_name == "deep_cnn" and "lr" in cfg and "l2" in cfg:
+        model = build_model_fn(win=cfg["win"], num_classes=cfg["num_classes"], lr=cfg["lr"], l2=cfg["l2"], dropout=cfg.get("dropout", 0.4))
+    elif model_name == "bilstm" and "lr" in cfg and "l2" in cfg:
+        model = build_model_fn(input_shape=(cfg["win"], 3), num_classes=cfg["num_classes"], lr=cfg["lr"], l2=cfg["l2"])
+    elif "lr" in cfg and "l2" in cfg:
+        model = build_model_fn(win=cfg["win"], num_classes=cfg["num_classes"], lr=cfg["lr"], l2=cfg["l2"])
     else:
         model = build_model_fn(input_shape=(cfg["win"], 3), num_classes=cfg["num_classes"])
 
@@ -484,8 +502,10 @@ def average_weights_from_checkpoints(ckpt_paths, build_model_fn, cfg, weights=No
     # Build a fresh model to know the weight structure
     if cfg.get("extract_features", False):
         base = build_model_fn(input_dim=30, num_classes=cfg["num_classes"], hidden_units=cfg.get("hidden_units", [64,32]), dropout=cfg.get("dropout", 0.3))
-    elif "lr" in cfg:
-        base = build_model_fn(win=cfg["win"], num_classes=cfg["num_classes"], lr=cfg["lr"], l2=cfg.get("l2"), dropout=cfg.get("dropout"))
+    elif model_name == "deep_cnn" and "lr" in cfg and "l2" in cfg:
+        base = build_model_fn(win=cfg["win"], num_classes=cfg["num_classes"], lr=cfg["lr"], l2=cfg["l2"], dropout=cfg.get("dropout", 0.4))
+    elif "lr" in cfg and "l2" in cfg:
+        base = build_model_fn(win=cfg["win"], num_classes=cfg["num_classes"], lr=cfg["lr"], l2=cfg["l2"])
     else:
         base = build_model_fn(input_shape=(cfg["win"], 3), num_classes=cfg["num_classes"])
     base_weights = None
@@ -502,8 +522,10 @@ def average_weights_from_checkpoints(ckpt_paths, build_model_fn, cfg, weights=No
     # put into a fresh instance
     if cfg.get("extract_features", False):
         final_model = build_model_fn(input_dim=30, num_classes=cfg["num_classes"], hidden_units=cfg.get("hidden_units", [64,32]), dropout=cfg.get("dropout", 0.3))
-    elif "lr" in cfg:
-        final_model = build_model_fn(win=cfg["win"], num_classes=cfg["num_classes"], lr=cfg["lr"], l2=cfg.get("l2"), dropout=cfg.get("dropout"))
+    elif model_name == "deep_cnn" and "lr" in cfg and "l2" in cfg:
+        final_model = build_model_fn(win=cfg["win"], num_classes=cfg["num_classes"], lr=cfg["lr"], l2=cfg["l2"], dropout=cfg.get("dropout", 0.4))
+    elif "lr" in cfg and "l2" in cfg:
+        final_model = build_model_fn(win=cfg["win"], num_classes=cfg["num_classes"], lr=cfg["lr"], l2=cfg["l2"])
     else:
         final_model = build_model_fn(input_shape=(cfg["win"], 3), num_classes=cfg["num_classes"])
     final_model.set_weights(base_weights)
@@ -560,6 +582,14 @@ def evaluate_on_dataset(model, ds, class_names=CATEGORIES, threshold=0.5):
     present_names = [class_names[i] for i in labels_present]
 
     print("\nClassification report:")
+    report = classification_report(
+        y_true, y_pred,
+        labels=labels_present,
+        target_names=present_names,
+        digits=4,
+        zero_division=0,
+        output_dict=True
+    )
     print(classification_report(
         y_true, y_pred,
         labels=labels_present,
@@ -575,12 +605,13 @@ def evaluate_on_dataset(model, ds, class_names=CATEGORIES, threshold=0.5):
     return {
         "accuracy": acc,
         "confusion_matrix": cm.tolist(),
+        "classification_report": report,
     }
 
 
-def run_pico_inference(model, run_root, model_name):
+def run_inference(model, run_root, model_name, dataset):
     # Use appropriate window size for each model
-    if model_name in ["cnn", "one_d_cnn"]:
+    if model_name in ["cnn", "one_d_cnn", "deep_cnn"]:
         win, hop = WIN_CNN, HOP_CNN
         extract_features = False
     elif model_name == "bilstm":
@@ -592,10 +623,19 @@ def run_pico_inference(model, run_root, model_name):
     else:
         raise ValueError(f"Unknown model_name: {model_name}")
     
-    pico_ds = load_pico_timeseries(batch_size=64, win=win, hop=hop, extract_features=extract_features)
+    if dataset == "pico":
+        ds = load_pico_timeseries(batch_size=64, win=win, hop=hop, extract_features=extract_features)
+        dataset_name = "pico"
+    elif dataset == "magic_wand":
+        from ml_emb.gesture_recog.util.inference import build_eval_dataset
+        ds = build_eval_dataset(dataset_root=pathlib.Path("dataset_magic_wand"), 
+                               batch_size=64, win=win)
+        dataset_name = "magic_wand"
+    else:
+        raise ValueError(f"Unknown dataset: {dataset}")
 
-    metrics = evaluate_on_dataset(model, pico_ds, class_names=CATEGORIES, threshold=0.4)
-    (run_root / f"metrics_pico_{model_name}.json").write_text(json.dumps(metrics, indent=2))
+    metrics = evaluate_on_dataset(model, ds, class_names=CATEGORIES, threshold=0.4)
+    (run_root / f"metrics_{dataset_name}_{model_name}.json").write_text(json.dumps(metrics, indent=2))
 
 
 def train_single_model(model_item):
@@ -637,7 +677,7 @@ if __name__ == "__main__":
     parser.add_argument("--mode", choices=["train", "inference", "both"], default="both",
                         help="Mode: train (CV training only), inference (pico evaluation only), both (default)")
     parser.add_argument("--models", nargs='*', default=['cnn', 'bilstm', 'one_d_cnn', 'feature'],
-                        help="Models to train/infer: cnn, bilstm, one_d_cnn, feature (default all)")
+                        help="Models to train/infer: cnn, bilstm, one_d_cnn, feature, deep_cnn (default all except deep_cnn)")
     parser.add_argument("--parallel", action="store_true",
                         help="Train multiple models in parallel using multiprocessing")
     parser.add_argument("--dataset", choices=["magic_wand", "pico"], default="magic_wand",
@@ -653,7 +693,8 @@ if __name__ == "__main__":
         'cnn': {'build_fn': build_cnn, 'config': CNN_CONFIG},
         'bilstm': {'build_fn': build_bilstm_classifier, 'config': BILSTM_CONFIG},
         'one_d_cnn': {'build_fn': build_new_cnn, 'config': ONE_D_CNN_CONFIG},
-        'feature': {'build_fn': build_feature_classifier, 'config': FEATURE_CONFIG}
+        'feature': {'build_fn': build_feature_classifier, 'config': FEATURE_CONFIG},
+        'deep_cnn': {'build_fn': build_deep_cnn, 'config': DEEP_CNN_CONFIG}
     }
 
     # Filter to selected models
@@ -708,58 +749,6 @@ if __name__ == "__main__":
                 models[model_name] = model
                 run_roots[model_name] = run_root
 
-    # Plot validation accuracy over epochs for all trained models
-    if args.mode in ["train", "both"] and run_roots:
-        print("\n=== Creating validation accuracy plot ===")
-        plt.figure(figsize=(12, 8))
-        
-        for model_name in run_roots:
-            run_root = run_roots[model_name]
-            
-            if args.dataset == "magic_wand":
-                # For Magic Wand: average across folds
-                fold_histories = []
-                for fold_idx in SUBJECTS:
-                    history_path = run_root / f"fold_{fold_idx}" / "history.csv"
-                    if history_path.exists():
-                        try:
-                            fold_df = pd.read_csv(history_path)
-                            if 'val_accuracy' in fold_df.columns:
-                                fold_histories.append(fold_df['val_accuracy'].values)
-                        except Exception as e:
-                            print(f"Warning: Could not read history for {model_name} fold {fold_idx}: {e}")
-                
-                if fold_histories:
-                    # Average across folds
-                    min_epochs = min(len(h) for h in fold_histories)
-                    avg_val_acc = np.mean([h[:min_epochs] for h in fold_histories], axis=0)
-                    epochs = range(1, len(avg_val_acc) + 1)
-                    plt.plot(epochs, avg_val_acc, label=f'{model_name.upper()} (CV)', linewidth=2, marker='o', markersize=3)
-            else:  # pico
-                # For Pico: single training history
-                history_path = run_root / "history.csv"
-                if history_path.exists():
-                    try:
-                        history_df = pd.read_csv(history_path)
-                        if 'val_accuracy' in history_df.columns:
-                            plt.plot(history_df['val_accuracy'], label=f'{model_name.upper()} (Pico)', linewidth=2, marker='s', markersize=3)
-                    except Exception as e:
-                        print(f"Warning: Could not read history for {model_name}: {e}")
-        
-        plt.xlabel('Epoch')
-        plt.ylabel('Validation Accuracy')
-        title_suffix = "Magic Wand (CV)" if args.dataset == "magic_wand" else "Pico Dataset"
-        plt.title(f'Validation Accuracy Over Epochs - {title_suffix}')
-        plt.legend()
-        plt.grid(True, alpha=0.3)
-        plt.tight_layout()
-        
-        # Save plot
-        plot_path = logs_dir / f"validation_accuracy_over_epochs_{args.dataset}.png"
-        plt.savefig(plot_path, dpi=300, bbox_inches='tight')
-        print(f"Saved validation accuracy plot to {plot_path}")
-        plt.show()
-
     if args.mode in ["inference", "both"]:
         for model_name in selected_models:
             if model_name not in models:
@@ -775,16 +764,21 @@ if __name__ == "__main__":
                 print(f"Loaded {model_name.upper()} from {model_path}")
 
         for model_name in selected_models:
-            print(f"\n=== Evaluating {model_name.upper()} on Pico dataset ===")
-            run_pico_inference(models[model_name], run_roots[model_name], model_name)
+            print(f"\n=== Evaluating {model_name.upper()} on {args.dataset.replace('_', ' ').title()} dataset ===")
+            run_inference(models[model_name], run_roots[model_name], model_name, args.dataset)
 
-        # Collect pico accuracies
+        # Collect dataset accuracies
+        dataset_name = args.dataset
         for model_name in selected_models:
-            metrics_path = run_roots[model_name] / f"metrics_pico_{model_name}.json"
+            metrics_path = run_roots[model_name] / f"metrics_{dataset_name}_{model_name}.json"
             if metrics_path.exists():
                 with open(metrics_path, 'r') as f:
                     metrics = json.load(f)
-                pico_accuracies[model_name] = metrics.get('accuracy', None)
+                pico_accuracies[model_name] = {
+                    'accuracy': metrics.get('accuracy', None),
+                    'precision': metrics.get('classification_report', {}).get('weighted avg', {}).get('precision', None),
+                    'f1_score': metrics.get('classification_report', {}).get('weighted avg', {}).get('f1-score', None)
+                }
 
     # Print final summary if multiple models
     if len(selected_models) > 1:
@@ -792,30 +786,129 @@ if __name__ == "__main__":
         if args.dataset == "magic_wand":
             print("FINAL SUMMARY - Magic Wand CV Training Results")
             print("="*60)
-            print(f"{'Model':<12} {'CV Mean Val Acc':<15} {'CV Std':<10} {'Pico Acc':<10}")
-            print("-"*55)
+            dataset_display = "Pico"
+            print(f"{'Model':<12} {'CV Mean Val Acc':<15} {'CV Std':<10} {'Pico Acc':<10} {'Pico F1':<10} {'Pico Prec':<10}")
+            print("-"*75)
             for model_name in selected_models:
                 cv_mean = cv_summaries.get(model_name, {}).get('mean_val_acc', 'N/A')
                 cv_std = cv_summaries.get(model_name, {}).get('std_val_acc', 'N/A')
-                pico_acc = pico_accuracies.get(model_name, 'N/A')
+                test_acc = pico_accuracies.get(model_name, {}).get('accuracy', 'N/A')
+                test_f1 = pico_accuracies.get(model_name, {}).get('f1_score', 'N/A')
+                test_prec = pico_accuracies.get(model_name, {}).get('precision', 'N/A')
                 cv_mean_str = f"{cv_mean:.4f}" if cv_mean != 'N/A' else 'N/A'
                 cv_std_str = f"{cv_std:.4f}" if cv_std != 'N/A' else 'N/A'
-                pico_str = f"{pico_acc:.4f}" if pico_acc != 'N/A' else 'N/A'
-                print(f"{model_name.upper():<12} {cv_mean_str:<15} {cv_std_str:<10} {pico_str:<10}")
+                test_acc_str = f"{test_acc:.4f}" if test_acc != 'N/A' else 'N/A'
+                test_f1_str = f"{test_f1:.4f}" if test_f1 != 'N/A' else 'N/A'
+                test_prec_str = f"{test_prec:.4f}" if test_prec != 'N/A' else 'N/A'
+                print(f"{model_name.upper():<12} {cv_mean_str:<15} {cv_std_str:<10} {test_acc_str:<10} {test_f1_str:<10} {test_prec_str:<10}")
         else:  # pico
             print("FINAL SUMMARY - Pico Dataset Training Results")
             print("="*60)
-            print(f"{'Model':<12} {'Pico Val Acc':<12} {'Pico Val Loss':<13} {'Pico Test Acc':<13}")
-            print("-"*55)
+            dataset_display = "Pico"
+            print(f"{'Model':<12} {'Pico Val Acc':<12} {'Pico Val Loss':<13} {'Pico Test Acc':<13} {'Pico Test F1':<12} {'Pico Test Prec':<13}")
+            print("-"*85)
             for model_name in selected_models:
                 val_acc = cv_summaries.get(model_name, {}).get('pico_val_acc', 'N/A')
                 val_loss = cv_summaries.get(model_name, {}).get('pico_val_loss', 'N/A')
-                pico_acc = pico_accuracies.get(model_name, 'N/A')
+                test_acc = pico_accuracies.get(model_name, {}).get('accuracy', 'N/A')
+                test_f1 = pico_accuracies.get(model_name, {}).get('f1_score', 'N/A')
+                test_prec = pico_accuracies.get(model_name, {}).get('precision', 'N/A')
                 val_acc_str = f"{val_acc:.4f}" if val_acc != 'N/A' else 'N/A'
                 val_loss_str = f"{val_loss:.4f}" if val_loss != 'N/A' else 'N/A'
-                pico_str = f"{pico_acc:.4f}" if pico_acc != 'N/A' else 'N/A'
-                print(f"{model_name.upper():<12} {val_acc_str:<12} {val_loss_str:<13} {pico_str:<13}")
+                test_acc_str = f"{test_acc:.4f}" if test_acc != 'N/A' else 'N/A'
+                test_f1_str = f"{test_f1:.4f}" if test_f1 != 'N/A' else 'N/A'
+                test_prec_str = f"{test_prec:.4f}" if test_prec != 'N/A' else 'N/A'
+                print(f"{model_name.upper():<12} {val_acc_str:<12} {val_loss_str:<13} {test_acc_str:<13} {test_f1_str:<12} {test_prec_str:<13}")
         print("="*60)
+
+    # Plot validation accuracy over epochs for all trained models (only after all processing is complete)
+    if args.mode in ["train", "both"] and run_roots:
+        print("\n=== Creating validation accuracy plot ===")
+        print(f"Found {len(run_roots)} models to plot: {list(run_roots.keys())}")
+        plt.figure(figsize=(12, 8))
+        
+        for model_name in run_roots:
+            run_root = run_roots[model_name]
+            print(f"Processing model {model_name}, run_root: {run_root}")
+            
+            if args.dataset == "magic_wand":
+                # For Magic Wand: average across folds
+                fold_histories = []
+                for fold_idx in SUBJECTS:
+                    history_path = run_root / f"fold_{fold_idx}" / "history.csv"
+                    print(f"  Checking fold {fold_idx} history: {history_path}")
+                    if history_path.exists():
+                        try:
+                            fold_df = pd.read_csv(history_path)
+                            if 'val_accuracy' in fold_df.columns:
+                                fold_histories.append(fold_df['val_accuracy'].values)
+                                print(f"    Found valid history with {len(fold_df)} epochs")
+                            else:
+                                print(f"    History file missing val_accuracy column")
+                        except Exception as e:
+                            print(f"Warning: Could not read history for {model_name} fold {fold_idx}: {e}")
+                    else:
+                        print(f"    History file does not exist: {history_path}")
+                
+                if fold_histories:
+                    # Average across folds
+                    min_epochs = min(len(h) for h in fold_histories)
+                    avg_val_acc = np.mean([h[:min_epochs] for h in fold_histories], axis=0)
+                    epochs = range(1, len(avg_val_acc) + 1)
+                    plt.plot(epochs, avg_val_acc, label=f'{model_name.upper()} (CV)', linewidth=2, marker='o', markersize=3)
+                    print(f"  Successfully plotted {model_name} CV data")
+                else:
+                    print(f"  No valid fold histories found for {model_name}")
+            else:  # pico
+                # For Pico: single training history
+                history_path = run_root / "history.csv"
+                print(f"  Checking pico history: {history_path}")
+                if history_path.exists():
+                    try:
+                        history_df = pd.read_csv(history_path)
+                        if 'val_accuracy' in history_df.columns:
+                            val_acc = history_df['val_accuracy'].values
+                            epochs = range(1, len(val_acc) + 1)
+                            
+                            # Apply smoothing to reduce bumpiness
+                            if len(val_acc) > 5:  # Only smooth if we have enough data points
+                                # Use a simple moving average with window size 3
+                                smoothed_val_acc = np.convolve(val_acc, np.ones(3)/3, mode='valid')
+                                # Pad the smoothed array to match original length
+                                pad_left = 1  # (3-1)//2
+                                smoothed_val_acc = np.concatenate([
+                                    val_acc[:pad_left], 
+                                    smoothed_val_acc, 
+                                    val_acc[-pad_left:] if len(val_acc) % 2 == 0 else val_acc[-pad_left-1:]
+                                ])
+                                plt.plot(epochs, smoothed_val_acc, label=f'{model_name.upper()} (Pico)', 
+                                        linewidth=2, alpha=0.8)
+                            else:
+                                # Not enough points for smoothing, plot raw
+                                plt.plot(epochs, val_acc, label=f'{model_name.upper()} (Pico)', 
+                                        linewidth=2, marker='s', markersize=3, alpha=0.8)
+                            print(f"  Successfully plotted {model_name} pico data")
+                        else:
+                            print(f"    History file missing val_accuracy column")
+                    except Exception as e:
+                        print(f"Warning: Could not read history for {model_name}: {e}")
+                else:
+                    print(f"    History file does not exist: {history_path}")
+        
+        plt.xlabel('Epoch')
+        plt.ylabel('Validation Accuracy')
+        title_suffix = "Magic Wand (CV)" if args.dataset == "magic_wand" else "Pico Dataset"
+        plt.title(f'Validation Accuracy Over Epochs - {title_suffix}')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        
+        # Save plot with timestamp to avoid overwriting
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        plot_path = logs_dir / f"validation_accuracy_over_epochs_{args.dataset}_{timestamp}.png"
+        plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+        print(f"Saved validation accuracy plot to {plot_path}")
+        plt.show()
 
     # Log all metrics and hyperparameters
     log_file = logs_dir / "training_log.json"
@@ -844,7 +937,7 @@ if __name__ == "__main__":
         if model_name in cv_summaries:
             model_log["cv_metrics"] = cv_summaries[model_name]
         if model_name in pico_accuracies:
-            model_log["pico_accuracy"] = pico_accuracies[model_name]
+            model_log["pico_metrics"] = pico_accuracies[model_name]
         log_entry[model_name] = model_log
     
     log_data.append(log_entry)
@@ -855,7 +948,7 @@ if __name__ == "__main__":
     
     print(f"\nLogged run to {log_file}")
 
-    dataset_name = "Magic Wand" if args.dataset == "magic_wand" else "Pico"
+    dataset_name = args.dataset.replace('_', ' ').title()
     if args.mode == "train":
         for model_name in selected_models:
             print(f"\n{model_name.upper()} {dataset_name} results saved to: {run_roots[model_name].resolve()}")

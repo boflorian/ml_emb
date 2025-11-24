@@ -1,0 +1,20 @@
+{
+  "win": 64,
+  "hop": 64,
+  "lp_window": 7,
+  "batch_size": 16,
+  "epochs": 800,
+  "num_classes": 4,
+  "lr": 0.0001,
+  "l2": 0.004,
+  "dropout": 0.25,
+  "augment": true,
+  "model_name": "one_d_cnn",
+  "class_names": [
+    "negative",
+    "ring",
+    "slope",
+    "wing"
+  ],
+  "dataset": "pico"
+}

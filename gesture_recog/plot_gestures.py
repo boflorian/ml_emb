@@ -5,7 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401  (needed for 3D projection)
 
-from data_loader import parse_gesture_file, iter_samples  # your existing helpers
+from ml_emb.gesture_recog.util.data_loader import parse_gesture_file  # your existing helpers
 
 
 SAMPLE_RE = re.compile(r"^sample\d+\s*$", re.IGNORECASE)

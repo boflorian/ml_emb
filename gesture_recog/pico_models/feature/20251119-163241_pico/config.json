@@ -1,0 +1,24 @@
+{
+  "win": 128,
+  "hop": 64,
+  "lp_window": 5,
+  "batch_size": 64,
+  "epochs": 800,
+  "num_classes": 4,
+  "hidden_units": [
+    128,
+    64,
+    32
+  ],
+  "dropout": 0.3,
+  "extract_features": true,
+  "augment": true,
+  "model_name": "feature",
+  "class_names": [
+    "negative",
+    "ring",
+    "slope",
+    "wing"
+  ],
+  "dataset": "pico"
+}
