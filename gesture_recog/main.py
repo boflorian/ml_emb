@@ -20,9 +20,9 @@ from util.data_loader import (
     segment_windows,
     lowpass_filter,
     normalize_clip,
-    build_train_test_datasets,
-    list_available_subjects
+    build_train_test_datasets
 )
+
 from model_definitions.cnn import build_cnn
 from model_definitions.bilstm import build_bilstm_classifier
 from model_definitions.one_d_cnn import build_oned_cnn
@@ -37,7 +37,7 @@ MAGIC_WAND_ROOT = pathlib.Path("dataset_magic_wand")
 
 SUBJECTS = list(range(8))  #careful, hardcoded, breaks on pico dataset
 
-MAX_EPOCHS = 800  # Global max epochs setting
+MAX_EPOCHS = 2000  # Global max epochs setting
 # ==============================
 #  Hyperparameters
 # =============================
@@ -45,9 +45,9 @@ WIN_CNN = 64
 HOP_CNN = 64
 LP_WINDOW_CNN = 7
 BATCH_SIZE_CNN = 64 
-LR_CNN = 5e-4  
+LR_CNN = 0.0001  
 L2_CNN = 1e-4  
-DROPOUT_CNN = 0.3  
+DROPOUT_CNN = 0.25  
 
 WIN_BILSTM = 64
 HOP_BILSTM = 64
@@ -106,8 +106,7 @@ DEEP_CNN_CONFIG = dict(
     num_classes=4, lr=LR_DEEP_CNN, l2=L2_DEEP_CNN, dropout=DROPOUT_DEEP_CNN, augment=True
 )
 
-# -------------------------------------
-
+# =================================================
 
 def find_best_averaged_model(model_name):
     """Find the averaged model with the best (highest) mean validation accuracy."""
@@ -699,7 +698,7 @@ def train_single_model(model_item):
 # -----------------------------
 # Main
 # -----------------------------
-if __name__ == "__main__":
+def main():
     parser = argparse.ArgumentParser(description="Train and/or evaluate CNN and BiLSTM models on gesture recognition.")
     parser.add_argument("--mode", choices=["train", "inference", "both"], default="both",
                         help="Mode: train (CV training only), inference (pico evaluation only), both (default)")
@@ -863,13 +862,11 @@ if __name__ == "__main__":
                 fold_histories = []
                 for fold_idx in SUBJECTS:
                     history_path = run_root / f"fold_{fold_idx}" / "history.csv"
-                    print(f"  Checking fold {fold_idx} history: {history_path}")
                     if history_path.exists():
                         try:
                             fold_df = pd.read_csv(history_path)
                             if 'val_accuracy' in fold_df.columns:
                                 fold_histories.append(fold_df['val_accuracy'].values)
-                                print(f"    Found valid history with {len(fold_df)} epochs")
                             else:
                                 print(f"    History file missing val_accuracy column")
                         except Exception as e:
@@ -985,3 +982,7 @@ if __name__ == "__main__":
     else:
         for model_name in selected_models:
             print(f"\n{model_name.upper()} {dataset_name} results saved to: {run_roots[model_name].resolve()}")
+
+
+if __name__ == "__main__":
+    main()
