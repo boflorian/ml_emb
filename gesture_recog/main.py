@@ -234,13 +234,13 @@ def run_cv_for_model(model_name, build_model_fn, cfg):
 
     for val_subject in SUBJECTS:
         print(f"\n=== {model_name} Fold: Val on subject {val_subject} ===")
-        summary = run_one_fold(run_root, val_subject, cfg, build_model_fn)
+        summary = run_one_fold(run_root, val_subject, cfg, build_model_fn, model_name)
         fold_summaries.append(summary)
 
     # Average weights (weighted by validation accuracy)
     ckpt_paths = [run_root / f"fold_{s}" / "checkpoints" / "best_valacc.keras" for s in SUBJECTS]
     val_accs = [s["best_val_accuracy"] for s in fold_summaries]
-    averaged_model = average_weights_from_checkpoints(ckpt_paths, build_model_fn, cfg, weights=val_accs)
+    averaged_model = average_weights_from_checkpoints(ckpt_paths, build_model_fn, cfg, model_name, weights=val_accs)
 
     # Save .keras
     keras_path = run_root / "averaged_model.keras"
@@ -414,7 +414,7 @@ def load_pico_train_val_split(batch_size=64, win=128, hop=64, val_split=0.2, ext
     return train_ds, val_ds
 
 
-def run_one_fold(run_root, val_subject, cfg, build_model_fn):
+def run_one_fold(run_root, val_subject, cfg, build_model_fn, model_name):
     train_subjects = tuple(s for s in SUBJECTS if s != val_subject)
     test_subjects  = (val_subject,)  
 
@@ -511,7 +511,7 @@ def run_one_fold(run_root, val_subject, cfg, build_model_fn):
     return summary
 
 
-def average_weights_from_checkpoints(ckpt_paths, build_model_fn, cfg, weights=None):
+def average_weights_from_checkpoints(ckpt_paths, build_model_fn, cfg, model_name, weights=None):
     """Element-wise weighted average of weights across several checkpoints."""
     if not all(p.exists() for p in ckpt_paths):
         raise FileNotFoundError("Some checkpoints missing")
@@ -851,6 +851,7 @@ def main():
     if args.mode in ["train", "both"] and run_roots:
         print("\n=== Creating validation accuracy plot ===")
         print(f"Found {len(run_roots)} models to plot: {list(run_roots.keys())}")
+
         plt.figure(figsize=(12, 8))
         
         for model_name in run_roots:
@@ -858,7 +859,7 @@ def main():
             print(f"Processing model {model_name}, run_root: {run_root}")
             
             if args.dataset == "magic_wand":
-                # For Magic Wand: average across folds
+                # For Magic Wand: average across folds with range visualization
                 fold_histories = []
                 for fold_idx in SUBJECTS:
                     history_path = run_root / f"fold_{fold_idx}" / "history.csv"
@@ -875,12 +876,27 @@ def main():
                         print(f"    History file does not exist: {history_path}")
                 
                 if fold_histories:
-                    # Average across folds
+                    # Calculate statistics across folds for each epoch
                     min_epochs = min(len(h) for h in fold_histories)
-                    avg_val_acc = np.mean([h[:min_epochs] for h in fold_histories], axis=0)
+                    fold_arrays = np.array([h[:min_epochs] for h in fold_histories])
+                    
+                    # Calculate mean, min, and max for each epoch
+                    avg_val_acc = np.mean(fold_arrays, axis=0)
+                    min_val_acc = np.min(fold_arrays, axis=0)
+                    max_val_acc = np.max(fold_arrays, axis=0)
+                    
                     epochs = range(1, len(avg_val_acc) + 1)
-                    plt.plot(epochs, avg_val_acc, label=f'{model_name.upper()} (CV)', linewidth=2, marker='o', markersize=3)
-                    print(f"  Successfully plotted {model_name} CV data")
+                    
+                    # Plot shaded area showing the range of accuracies
+                    plt.fill_between(epochs, min_val_acc, max_val_acc, alpha=0.3, 
+                                   label=f'{model_name.upper()} CV Range')
+                    
+                    # Plot the average line on top
+                    plt.plot(epochs, avg_val_acc, label=f'{model_name.upper()} CV Mean', 
+                           linewidth=2, marker='o', markersize=3)
+                    
+                    print(f"  Successfully plotted {model_name} CV data (mean + range)")
+                    print(f"    Range: {min_val_acc[-1]:.4f} - {max_val_acc[-1]:.4f} (final epoch)")
                 else:
                     print(f"  No valid fold histories found for {model_name}")
             else:  # pico

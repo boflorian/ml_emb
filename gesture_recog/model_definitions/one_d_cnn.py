@@ -2,7 +2,7 @@ from tensorflow import keras
 from tensorflow.keras import layers, regularizers
 
 
-def build_new_cnn(win=64, num_classes=4, lr=1e-3, l2=None, dropout=None):
+def build_oned_cnn(win=64, num_classes=4, lr=1e-3, l2=None, dropout=None):
     """
     New CNN architecture:
     - Conv1D 64, kernel 9

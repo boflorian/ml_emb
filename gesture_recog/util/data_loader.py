@@ -2,13 +2,38 @@ import pathlib
 import re
 
 import numpy as np
-from ml_emb.gesture_recog.util.augmentation import *
+from util.augmentation import *
 from util.feature_extraction import tf_extract_features
 
-ROOT = pathlib.Path('../dataset_magic_wand')
+ROOT = pathlib.Path('dataset_magic_wand')
 CATEGORIES = ["negative", "ring", "slope", "wing"]
 CAT_TO_ID = {c:i for i,c in enumerate(CATEGORIES)}
 PERSON_RE = re.compile(r"person(\d+)\.txt$", re.IGNORECASE)
+
+
+def list_available_subjects(root):
+    subjects = set()
+    root_path = pathlib.Path(root)
+    
+    # Check if files are directly in root (magic_wand style) or in subdirectories (pico style)
+    txt_files = list(root_path.glob("*.txt"))
+    if txt_files:
+        # Files directly in root
+        for path in txt_files:
+            m = re.search(r"person(\d+)", path.name)
+            if m:
+                subjects.add(int(m.group(1)))
+    else:
+        # Files in subdirectories (check common gesture categories)
+        for cls in CATEGORIES:
+            cls_dir = root_path / cls
+            if cls_dir.exists():
+                for path in cls_dir.glob("person*.txt"):
+                    m = re.search(r"person(\d+)", path.name)
+                    if m:
+                        subjects.add(int(m.group(1)))
+    
+    return sorted(subjects)
 
 
 def parse_gesture_file(filepath):
