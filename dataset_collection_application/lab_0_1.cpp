@@ -18,7 +18,7 @@ static FATFS fs;
 // Configuration
 // Data collection parameters. Edit as needed.
 const uint32_t MAX_DATA_COLLECTION_TIME_US = 3 * 1000 * 1000; // duration of session 
-uint32_t RECORD_TIMES = 10; // number of sessions 
+uint32_t RECORD_TIMES = 20; // number of sessions 
 
 
 // Control flags
@@ -133,6 +133,12 @@ static void core1_entry(void)
         while (SESSION == last_seen_session && !STOP_ALL) { tight_loop_contents(); }
         if (STOP_ALL) break;
 
+        // Wait for recording to actually start before proceeding
+        while (!RECORD && !STOP_ALL) { tight_loop_contents(); }
+        if (STOP_ALL) break;
+
+        printf("[Core1] Writing sample%u to file...\n", SESSION);
+
         // Write sample header for this session
         char header[96];
         int hdr_len = snprintf(header, sizeof header, "sample%u\nax,ay,az\n", SESSION);
@@ -142,9 +148,18 @@ static void core1_entry(void)
 
         uint32_t lines_since_sync = 0;
         imu_sample_t s;
+        
+        // Wait for data to start arriving in the queue
+        while (RECORD && queue_is_empty(&sample_q)) { tight_loop_contents(); }
+        
         for (;;) 
         {
-            queue_remove_blocking(&sample_q, &s);
+            // Use non-blocking check to avoid getting stuck
+            if (!queue_try_remove(&sample_q, &s)) {
+                if (!RECORD && queue_is_empty(&sample_q)) break; // session done
+                tight_loop_contents();
+                continue;
+            }
             
             char line[96];
             int n = snprintf(line, sizeof line, "%d,%d,%d\n",
@@ -153,9 +168,6 @@ static void core1_entry(void)
             fr = f_write(&f, line, (UINT)n, &bw);
             if (fr != FR_OK || bw != (UINT)n) die(fr, "f_write(sample)");
             if (++lines_since_sync >= 128) { f_sync(&f); lines_since_sync = 0; }
-            
-            if (!RECORD && queue_is_empty(&sample_q)) break; // session done
-            tight_loop_contents();
         }
 
         // Write 4 empty lines between samples
@@ -165,6 +177,7 @@ static void core1_entry(void)
         if (fr != FR_OK || bw != strlen(separator)) die(fr, "f_write(separator)");
 
         f_sync(&f);
+        printf("[Core1] Sample %u written\n", SESSION);
 
         last_seen_session = SESSION;
     }
@@ -195,7 +208,11 @@ int main()
 
     for (uint32_t i = 0; i < RECORD_TIMES; i++) 
     {     
-        SESSION++;       
+        SESSION++;
+        printf("\n========================================\n");
+        printf("Starting Sample %u of %u\n", SESSION, RECORD_TIMES);
+        printf("========================================\n");
+        
         RECORD = true;   
 
         show_color_rgb(0, 255, 0);
@@ -212,16 +229,24 @@ int main()
             if (!queue_try_add(&sample_q, &s)) {
                 show_color_rgb(0, 0, 255); // overflow indicator
             }
-            // optional: sleep_us(1000); // 1 kHz source rate
+
+            // sleep_us(1000); // 1 kHz source rate
+            // sleep_us(20000); // 50 Hz source rate
+            // sleep_us(40000); // 25 Hz source rate
+            sleep_us(10000); // 100 Hz source rate
         }
 
-        RECORD = false;     
+        RECORD = false;
+        printf("Sample %u completed. Waiting for file write...\n", SESSION);
 
         // End of session
         (show_color_rgb(1,1,1), sleep_ms(250),show_color_rgb(0,0,255), sleep_ms(250),show_color_rgb(1,1,1), sleep_ms(250),show_color_rgb(0,0,255), sleep_ms(250)); 
     }
 
-    STOP_ALL = true;      
+    STOP_ALL = true;
+    printf("\n========================================\n");
+    printf("All %u samples completed!\n", RECORD_TIMES);
+    printf("========================================\n");
 
     for(;;){ show_color_rgb(0,0,255); sleep_ms(250); show_color_rgb(1,1,1); sleep_ms(250); }
     return 0;
