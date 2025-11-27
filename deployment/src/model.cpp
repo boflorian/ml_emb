@@ -60,12 +60,13 @@ int Model::setup()
         return 0;
     }
 
-    static tflite::MicroMutableOpResolver<20> micro_op_resolver; // Allow more ops
+    static tflite::MicroMutableOpResolver<25> micro_op_resolver; // Allow more ops
     micro_op_resolver.AddFullyConnected();
     micro_op_resolver.AddConv2D();
     micro_op_resolver.AddDepthwiseConv2D();
     micro_op_resolver.AddSoftmax();
     micro_op_resolver.AddRelu();
+    micro_op_resolver.AddLeakyRelu();
     micro_op_resolver.AddMaxPool2D();
     micro_op_resolver.AddAveragePool2D();
     micro_op_resolver.AddReshape();
