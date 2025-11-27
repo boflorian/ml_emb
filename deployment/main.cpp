@@ -183,6 +183,9 @@ int main(void)
         // When buffer is full, run inference
         if (buffer_index >= GESTURE_WINDOW_SIZE) {
             printf("Buffer full, running inference\n");
+            // Display inference indicator
+            GUI_DisString_EN(10, 80, "Inferring...", &Font16, WHITE, BLACK);
+            
             // Copy buffer to model input
             const int bytes_to_copy = byte_size < imu_buffer_bytes ? byte_size : imu_buffer_bytes;
             memcpy(test_image_input, imu_buffer, bytes_to_copy);
@@ -196,6 +199,8 @@ int main(void)
             printf("Inference result: %d\n", result);
             if (result == -1) {
                 printf("Failed to run inference\n");
+                // Clear inference indicator on failure
+                GUI_DisString_EN(10, 80, "           ", &Font16, WHITE, BLACK);
             } else {
                 const char* label = (result >= 0 && result < kCategoryCount) ? kCategoryLabels[result] : "unknown";
                 printf("Predicted Gesture: %d (%s)\n", result, label);
@@ -203,6 +208,8 @@ int main(void)
                 char str[32];
                 snprintf(str, sizeof(str), "Gesture: %s", label);
                 GUI_DisString_EN(10, 100, str, &Font24, WHITE, BLACK);
+                // Clear inference indicator after successful inference
+                GUI_DisString_EN(10, 80, "           ", &Font16, WHITE, BLACK);
             }
 
             // Reset buffer
