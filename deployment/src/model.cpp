@@ -60,7 +60,7 @@ int Model::setup()
         return 0;
     }
 
-    static tflite::MicroMutableOpResolver<40> micro_op_resolver; // Allow more ops
+    static tflite::MicroMutableOpResolver<50> micro_op_resolver; // Allow more ops
     micro_op_resolver.AddFullyConnected();
     micro_op_resolver.AddConv2D();
     micro_op_resolver.AddDepthwiseConv2D();
@@ -87,6 +87,11 @@ int Model::setup()
     micro_op_resolver.AddPad();
     micro_op_resolver.AddMul();         // already added; harmless
     micro_op_resolver.AddAdd();         // already added; harmless
+    micro_op_resolver.AddSquare();
+    micro_op_resolver.AddSquaredDifference();
+    micro_op_resolver.AddMaximum();
+    micro_op_resolver.AddMinimum();
+    micro_op_resolver.AddCast();
 
     static uint8_t tensor_arena[arena_size];
     static tflite::MicroInterpreter static_interpreter(
@@ -99,6 +104,13 @@ int Model::setup()
     }
 
     input = interpreter->input(0);
+    if (input) {
+        printf("Input type=%d dims:", input->type);
+        for (int i = 0; i < input->dims->size; ++i) {
+            printf(" %d", input->dims->data[i]);
+        }
+        printf(" bytes=%d\n", input->bytes);
+    }
 
     printf("Model::setup success\n");
     return 1;

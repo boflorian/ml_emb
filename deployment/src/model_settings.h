@@ -7,9 +7,8 @@ constexpr int kNumChannels = 1;
 
 constexpr int kMaxImageSize = kNumCols * kNumRows * kNumChannels;
 
-constexpr int kCategoryCount = 2;
-constexpr int kPersonIndex = 1;
-constexpr int kNotAPersonIndex = 0;
+// Gesture model outputs 4 classes: negative, ring, slope, wing
+constexpr int kCategoryCount = 4;
 extern const char* kCategoryLabels[kCategoryCount];
 
 constexpr int image_col_size = 28;

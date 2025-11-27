@@ -197,10 +197,11 @@ int main(void)
             if (result == -1) {
                 printf("Failed to run inference\n");
             } else {
-                printf("Predicted Gesture: %d\n", result);
+                const char* label = (result >= 0 && result < kCategoryCount) ? kCategoryLabels[result] : "unknown";
+                printf("Predicted Gesture: %d (%s)\n", result, label);
                 // Display gesture on LCD
                 char str[32];
-                sprintf(str, "Gesture: %d", result);
+                snprintf(str, sizeof(str), "Gesture: %s", label);
                 GUI_DisString_EN(10, 100, str, &Font24, WHITE, BLACK);
             }
 
