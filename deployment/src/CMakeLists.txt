@@ -1,4 +1,5 @@
 aux_source_directory(. DIR_SRC_SRCS)
+list(APPEND DIR_SRC_SRCS model_settings.cpp)
 
 include_directories(../lib/pico-tflmicro)
 
