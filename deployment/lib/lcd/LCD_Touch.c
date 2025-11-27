@@ -927,59 +927,10 @@ void reset_inference(INFERENCE* _inference)
 void init_gui(void)
 {
     LCD_Clear(LCD_BACKGROUND);
-    TP_Scan(0);
 
-    start_x = (sLCD_DIS.LCD_Dis_Column - total_width) / 2;
-
-    // Clear inference data
-    if (inference != NULL) {
-        for (int i=0; i<DIGIT_INPUT_COUNT; i++) {
-            reinitialize_to_zero(inference->UserInputs[i].InputData);
-            inference->UserInputs[i].PredictedDigit = -1;
-        }
-    }
-    // Default color to black
-    sTP_Draw.Color = BLACK;
-    
-
-    // Display "MACHINE LEARNING" and "FOR EMBEDDED SYSTEM" at the top of the screen
-    GUI_DisString_EN(100, 20, "MACHINE LEARNING", &Font24, WHITE, RED);
-    GUI_DisString_EN(80, 45, "FOR EMBEDDED SYSTEM", &Font24, WHITE, RED);
-
-    // Draw four boxes with black border and white inside
-    for (int i = 0; i < DIGIT_INPUT_COUNT; i++)
-    {
-        int x = start_x + i * (BOX_SIZE + 2 * BORDER_THICKNESS + SPACE_BETWEEN_BOXES);
-        int y = start_y;
-
-        // Draw black border
-        GUI_DrawRectangle(x - BORDER_THICKNESS, y - BORDER_THICKNESS, x + BOX_SIZE + BORDER_THICKNESS, y + BOX_SIZE + BORDER_THICKNESS, BLACK, DRAW_FULL, DOT_PIXEL_1X1);
-
-        // Draw white interior
-        GUI_DrawRectangle(x, y, x + BOX_SIZE, y + BOX_SIZE, WHITE, DRAW_FULL, DOT_PIXEL_1X1);
-        
-
-        BOX_REFERENCE p = { .start_x = x, .start_y = y, .end_x = x + BOX_SIZE, .end_y = y + BOX_SIZE, .content = {0}};
-        box_refs[i] = p;
-    }
-
-    // Calculate positions for the "LOGIN" and "CLEAR" buttons
-    int button_width = 100;
-    int button_height = 40;
-    int button_space = 20; // Space between the two buttons
-    int buttons_total_width = 2 * button_width + button_space;
-    int buttons_start_x = (sLCD_DIS.LCD_Dis_Column - buttons_total_width) / 2;
-    int button_y = start_y + BOX_SIZE + 30;
-
-    // Draw "LOGIN" button
-    int login_button_x = buttons_start_x;
-    GUI_DrawRectangle(login_button_x, button_y, login_button_x + button_width, button_y + button_height, sTP_Draw.Color, DRAW_FULL, DOT_PIXEL_1X1);
-    GUI_DisString_EN(login_button_x + 15, button_y + 15, "LOGIN", &Font20, BLACK, WHITE);
-
-    // Draw "CLEAR" button
-    int clear_button_x = buttons_start_x + button_width + button_space;
-    GUI_DrawRectangle(clear_button_x, button_y, clear_button_x + button_width, button_y + button_height, sTP_Draw.Color, DRAW_FULL, DOT_PIXEL_1X1);
-    GUI_DisString_EN(clear_button_x + 15, button_y + 15, "CLEAR", &Font20, BLACK, WHITE);
+    // Display title for gesture recognition
+    GUI_DisString_EN(50, 20, "Gesture Recognition", &Font24, WHITE, RED);
+    GUI_DisString_EN(30, 50, "Using IMU Sensor", &Font20, WHITE, BLACK);
 }
 
 /*******************************************************************************

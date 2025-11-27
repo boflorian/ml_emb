@@ -114,7 +114,7 @@ target_link_libraries(
   lcd 
   font 
   config
-  #models
+  models
   icm20948
   pico_stdlib
   hardware_spi 
@@ -128,7 +128,7 @@ target_link_libraries(
   main_arena_size_test 
   src
   config
-  #models
+  models
   icm20948
   pico_stdlib
   hardware_spi 
@@ -142,7 +142,7 @@ target_link_libraries(
   main_inference_test 
   src
   config
-  #models
+  models
   icm20948
   pico_stdlib
   hardware_spi 

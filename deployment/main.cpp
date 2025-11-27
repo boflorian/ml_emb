@@ -21,6 +21,9 @@
 // For IMU
 #include "icm20948.h"
 
+// Extern declarations for LCD
+extern LCD_DIS sLCD_DIS;
+
 using namespace std; 
 #define HALT_CORE_1() while (1) { tight_loop_contents(); }
 
@@ -52,8 +55,8 @@ void core1_entry() {
       {
         LCD_SetBackLight(1000);
         
-        // pass the ML inputs, output, and semaphore
-        TP_DrawBoard();
+        // Removed TP_DrawBoard() as we're using IMU for input, not touch
+        // TP_DrawBoard();
       }
     }
 }
@@ -61,9 +64,13 @@ void core1_entry() {
 int main(void) 
 {
     System_Init();
+    printf("System initialized\n");
+    fflush(stdout);
     mutex_init(&mutex);  // Initialize the mutex
 
     sleep_ms(5000);
+    printf("Sleep done\n");
+    fflush(stdout);
 
     // Initialize IMU
     IMU_EN_SENSOR_TYPE imu_type;
@@ -78,14 +85,19 @@ int main(void)
     LCD_SCAN_DIR  lcd_scan_dir = SCAN_DIR_DFT;
     LCD_Init(lcd_scan_dir,1000);
     TP_Init(lcd_scan_dir);
-    LCD_SCAN_DIR bmp_scan_dir = D2U_R2L;
     TP_GetAdFac();
+    printf("LCD initialized\n");
+    fflush(stdout);
     reset_inference(&inference);
 	init_gui();
+
+    // Keep the white background from init_gui()
 
 
     // run core1 loop that handles user interface
     multicore_launch_core1(core1_entry);
+    printf("Core1 launched\n");
+    fflush(stdout);
 
         // initialize ML model
     if (!ml_model.setup()) {
@@ -107,10 +119,12 @@ int main(void)
     }
 
     // Buffer for IMU data: GESTURE_WINDOW_SIZE samples * 6 features (ax,ay,az,gx,gy,gz)
-    float imu_buffer[GESTURE_WINDOW_SIZE * 6];
+    uint8_t imu_buffer[GESTURE_WINDOW_SIZE * 6];
     int buffer_index = 0;
 
     while (true) {
+        printf("Entering main loop iteration\n");
+        fflush(stdout);
         // Read IMU data
         IMU_ST_SENSOR_DATA gyro, accel;
         imuDataAccGyrGet(&gyro, &accel);
@@ -119,34 +133,44 @@ int main(void)
         printf("Accel: X=%d, Y=%d, Z=%d | Gyro: X=%d, Y=%d, Z=%d\n",
                accel.s16X, accel.s16Y, accel.s16Z,
                gyro.s16X, gyro.s16Y, gyro.s16Z);
+        fflush(stdout);
 
-        // Collect data in buffer (normalize to float if needed)
-        imu_buffer[buffer_index * 6 + 0] = (float)accel.s16X / 32768.0f; // Assuming 16-bit signed
-        imu_buffer[buffer_index * 6 + 1] = (float)accel.s16Y / 32768.0f;
-        imu_buffer[buffer_index * 6 + 2] = (float)accel.s16Z / 32768.0f;
-        imu_buffer[buffer_index * 6 + 3] = (float)gyro.s16X / 32768.0f;
-        imu_buffer[buffer_index * 6 + 4] = (float)gyro.s16Y / 32768.0f;
-        imu_buffer[buffer_index * 6 + 5] = (float)gyro.s16Z / 32768.0f;
+        // Collect data in buffer, quantize to uint8 (assuming model expects 0-255 for -1 to 1)
+        float ax = (float)accel.s16X / 32768.0f;
+        float ay = (float)accel.s16Y / 32768.0f;
+        float az = (float)accel.s16Z / 32768.0f;
+        float gx = (float)gyro.s16X / 32768.0f;
+        float gy = (float)gyro.s16Y / 32768.0f;
+        float gz = (float)gyro.s16Z / 32768.0f;
+
+        imu_buffer[buffer_index * 6 + 0] = (uint8_t)((ax + 1.0f) * 127.5f);
+        imu_buffer[buffer_index * 6 + 1] = (uint8_t)((ay + 1.0f) * 127.5f);
+        imu_buffer[buffer_index * 6 + 2] = (uint8_t)((az + 1.0f) * 127.5f);
+        imu_buffer[buffer_index * 6 + 3] = (uint8_t)((gx + 1.0f) * 127.5f);
+        imu_buffer[buffer_index * 6 + 4] = (uint8_t)((gy + 1.0f) * 127.5f);
+        imu_buffer[buffer_index * 6 + 5] = (uint8_t)((gz + 1.0f) * 127.5f);
 
         buffer_index++;
 
         // When buffer is full, run inference
         if (buffer_index >= GESTURE_WINDOW_SIZE) {
-            // Copy buffer to model input (assuming float input; adjust if quantized)
+            printf("Buffer full, running inference\n");
+            fflush(stdout);
+            // Copy buffer to model input
             memcpy(test_image_input, imu_buffer, byte_size);
 
             // Run inference
             int result = ml_model.predict();
+            printf("Inference result: %d\n", result);
+            fflush(stdout);
             if (result == -1) {
                 printf("Failed to run inference\n");
             } else {
                 printf("Predicted Gesture: %d\n", result);
-                // Display on LCD
+                // Display gesture on LCD
                 char str[32];
                 sprintf(str, "Gesture: %d", result);
-                GUI_Clear(BLACK);  // Clear screen
-                GUI_DisString_EN(10, 50, str, &Font24, WHITE, BLACK);
-                GUI_Show();  // Update display
+                GUI_DisString_EN(10, 100, str, &Font24, WHITE, BLACK);
             }
 
             // Reset buffer

@@ -15,5 +15,5 @@ extern const char* kCategoryLabels[kCategoryCount];
 constexpr int image_col_size = 28;
 constexpr int image_row_size = 28;
 
-constexpr int arena_size = 10 * 1024; // TODO: 3. Edit this for your own model.
+constexpr int arena_size = 200 * 1024; // Increased for CNN model
 #endif  // TFLITE_INFERENCE_TEST_MODEL_SETTINGS_H_
