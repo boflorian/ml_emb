@@ -60,7 +60,7 @@ int Model::setup()
         return 0;
     }
 
-    static tflite::MicroMutableOpResolver<25> micro_op_resolver; // Allow more ops
+    static tflite::MicroMutableOpResolver<40> micro_op_resolver; // Allow more ops
     micro_op_resolver.AddFullyConnected();
     micro_op_resolver.AddConv2D();
     micro_op_resolver.AddDepthwiseConv2D();
@@ -75,6 +75,18 @@ int Model::setup()
     micro_op_resolver.AddAdd();
     micro_op_resolver.AddMul();
     micro_op_resolver.AddExpandDims();
+    micro_op_resolver.AddMean();
+    micro_op_resolver.AddBatchMatMul();
+    micro_op_resolver.AddPack();        // Used by GlobalAveragePooling / axis ops
+    micro_op_resolver.AddLogistic();    // For LayerNormalization epsilon path
+    micro_op_resolver.AddLogSoftmax();  // For safety if present in converted head
+    micro_op_resolver.AddSub();
+    micro_op_resolver.AddDiv();
+    micro_op_resolver.AddRsqrt();
+    micro_op_resolver.AddStridedSlice();
+    micro_op_resolver.AddPad();
+    micro_op_resolver.AddMul();         // already added; harmless
+    micro_op_resolver.AddAdd();         // already added; harmless
 
     static uint8_t tensor_arena[arena_size];
     static tflite::MicroInterpreter static_interpreter(
