@@ -3,6 +3,7 @@
 #include <cstdlib> 
 #include <iostream>
 #include <cstring>
+#include <cstdio>
 #include <stdio.h>
 
 #include "pico/stdlib.h"
@@ -66,19 +67,19 @@ void core1_entry() {
 int main(void) 
 {
     System_Init();
+    setvbuf(stdout, NULL, _IONBF, 0); // make USB/UART stdout unbuffered
     printf("System initialized\n");
-    fflush(stdout);
     mutex_init(&mutex);  // Initialize the mutex
 
     sleep_ms(5000);
     printf("Sleep done\n");
-    fflush(stdout);
 
     // Initialize IMU
     IMU_EN_SENSOR_TYPE imu_type;
     imuInit(&imu_type);
     if (imu_type != IMU_EN_SENSOR_TYPE_ICM20948) {
         printf("IMU not detected\n");
+        GUI_DisString_EN(10, 70, "ERR: IMU missing", &Font20, WHITE, RED);
         HALT_CORE_1();
     }
     printf("IMU initialized\n");
@@ -89,9 +90,9 @@ int main(void)
     TP_Init(lcd_scan_dir);
     TP_GetAdFac();
     printf("LCD initialized\n");
-    fflush(stdout);
     reset_inference(&inference);
 	init_gui();
+    GUI_DisString_EN(10, 130, "IMU OK", &Font16, WHITE, BLACK);
 
     // Keep the white background from init_gui()
 
@@ -99,14 +100,15 @@ int main(void)
     // run core1 loop that handles user interface
     multicore_launch_core1(core1_entry);
     printf("Core1 launched\n");
-    fflush(stdout);
 
         // initialize ML model
     if (!ml_model.setup()) {
         printf("Failed to initialize ML model!\n");
+        GUI_DisString_EN(10, 150, "ERR: model init", &Font16, WHITE, RED);
         HALT_CORE_1();
     }
     printf("Model initialized\n");
+    GUI_DisString_EN(10, 150, "Model OK", &Font16, WHITE, BLACK);
     
     uint8_t* test_image_input = ml_model.input_data();
     if (test_image_input == nullptr) {
@@ -124,10 +126,13 @@ int main(void)
     const int imu_buffer_bytes = GESTURE_WINDOW_SIZE * IMU_BYTES_PER_SAMPLE;
     uint8_t imu_buffer[imu_buffer_bytes];
     int buffer_index = 0;
+    int loop_counter = 0;
 
     while (true) {
         printf("Entering main loop iteration\n");
-        fflush(stdout);
+        if ((loop_counter++ % 50) == 0) {
+            GUI_DisString_EN(10, 180, "Collecting IMU...", &Font16, WHITE, BLACK);
+        }
         // Read IMU data
         IMU_ST_SENSOR_DATA gyro, accel;
         imuDataAccGyrGet(&gyro, &accel);
@@ -136,7 +141,6 @@ int main(void)
         printf("Accel: X=%d, Y=%d, Z=%d | Gyro: X=%d, Y=%d, Z=%d\n",
                accel.s16X, accel.s16Y, accel.s16Z,
                gyro.s16X, gyro.s16Y, gyro.s16Z);
-        fflush(stdout);
 
         // Collect data in buffer, quantize to uint8 (assuming model expects 0-255 for -1 to 1)
         float ax = (float)accel.s16X / 32768.0f;
@@ -159,7 +163,6 @@ int main(void)
         // When buffer is full, run inference
         if (buffer_index >= GESTURE_WINDOW_SIZE) {
             printf("Buffer full, running inference\n");
-            fflush(stdout);
             // Copy buffer to model input
             const int bytes_to_copy = byte_size < imu_buffer_bytes ? byte_size : imu_buffer_bytes;
             memcpy(test_image_input, imu_buffer, bytes_to_copy);
@@ -171,9 +174,9 @@ int main(void)
             // Run inference
             int result = ml_model.predict();
             printf("Inference result: %d\n", result);
-            fflush(stdout);
             if (result == -1) {
                 printf("Failed to run inference\n");
+                GUI_DisString_EN(10, 200, "Inference failed", &Font16, WHITE, RED);
             } else {
                 printf("Predicted Gesture: %d\n", result);
                 // Display gesture on LCD
