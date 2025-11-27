@@ -36,6 +36,29 @@ INFERENCE inference;
 Model ml_model;
 
 mutex_t mutex;  // Declare a mutex
+static bool lcd_ready = false;
+
+// Simple fatal handler that blinks LED and shows an error message forever
+static void fatal_error(const char* msg) {
+    printf("FATAL: %s\n", msg);
+    fflush(stdout);
+#ifdef PICO_DEFAULT_LED_PIN
+    gpio_init(PICO_DEFAULT_LED_PIN);
+    gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
+#endif
+    while (1) {
+#ifdef PICO_DEFAULT_LED_PIN
+        static bool led_on = false;
+        led_on = !led_on;
+        gpio_put(PICO_DEFAULT_LED_PIN, led_on ? 1 : 0);
+#endif
+        if (lcd_ready) {
+            GUI_DisString_EN(10, 10, "ERROR:", &Font16, WHITE, RED);
+            GUI_DisString_EN(10, 30, msg, &Font16, WHITE, BLACK);
+        }
+        sleep_ms(250);
+    }
+}
 
 
 int count_digits(int number) {
@@ -66,6 +89,7 @@ void core1_entry() {
 int main(void) 
 {
     System_Init();
+    setvbuf(stdout, NULL, _IONBF, 0); // unbuffered stdout for USB/UART
     printf("System initialized\n");
     mutex_init(&mutex);  // Initialize the mutex
 
@@ -76,8 +100,7 @@ int main(void)
     IMU_EN_SENSOR_TYPE imu_type;
     imuInit(&imu_type);
     if (imu_type != IMU_EN_SENSOR_TYPE_ICM20948) {
-        printf("IMU not detected\n");
-        HALT_CORE_1();
+        fatal_error("IMU not detected");
     }
     printf("IMU initialized\n");
 
@@ -89,6 +112,7 @@ int main(void)
     printf("LCD initialized\n");
     reset_inference(&inference);
 	init_gui();
+    lcd_ready = true;
 
     // Keep the white background from init_gui()
 
@@ -99,21 +123,18 @@ int main(void)
 
         // initialize ML model
     if (!ml_model.setup()) {
-        printf("Failed to initialize ML model!\n");
-        HALT_CORE_1();
+        fatal_error("Model init failed");
     }
     printf("Model initialized\n");
     
     uint8_t* test_image_input = ml_model.input_data();
     if (test_image_input == nullptr) {
-        printf("Cannot set input\n");
-        HALT_CORE_1();
+        fatal_error("Cannot get model input");
     }
 
     int byte_size = ml_model.byte_size();
     if (!byte_size) {
-        printf("Byte size not found\n");
-        HALT_CORE_1();
+        fatal_error("Byte size not found");
     }
 
     // Buffer for IMU data: GESTURE_WINDOW_SIZE samples * 6 features (ax,ay,az,gx,gy,gz)
@@ -122,6 +143,7 @@ int main(void)
     int buffer_index = 0;
     int loop_counter = 0;
     bool heartbeat_on = false;
+    uint16_t backlight_level = 1000;
 
 #ifdef PICO_DEFAULT_LED_PIN
     gpio_init(PICO_DEFAULT_LED_PIN);
@@ -192,6 +214,10 @@ int main(void)
 #ifdef PICO_DEFAULT_LED_PIN
             gpio_put(PICO_DEFAULT_LED_PIN, heartbeat_on ? 1 : 0);
 #endif
+            // Pulse the LCD backlight as a visual heartbeat even if text is not visible
+            backlight_level = heartbeat_on ? 1000 : 100;
+            LCD_SetBackLight(backlight_level);
+            // Leave a small marker on-screen if the LCD is on
             GUI_DisString_EN(10, 200, heartbeat_on ? "*" : " ", &Font16, WHITE, BLACK);
         }
 
