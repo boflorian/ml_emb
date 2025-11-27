@@ -13,7 +13,17 @@ gesture_recog/logs
 gesture_recog/__pycache__
 gesture_recog/.ipynb_checkpoints
 gesture_recgo/util/__pycache__
-# gesture_recog/chosen_models 
+# gesture_recog/chosen_modelsld/
+
+# C Build artifacts and folders 
+build-*/
+bin/
+obj/
+*.o
+*.a
+*.so
+*.dll
+*.exe 
 
 
 .ipynb_checkpoints

@@ -97,6 +97,7 @@ add_subdirectory(lib/pico-tflmicro)
 add_subdirectory(lib/config)
 add_subdirectory(lib/lcd)
 add_subdirectory(lib/font)
+add_subdirectory(drivers/icm20948)
 
 include_directories(./src)
 include_directories(./models)
@@ -104,6 +105,7 @@ include_directories(./lib/pico-tflmicro)
 include_directories(./lib/config)
 include_directories(./lib/lcd)
 include_directories(./lib/font)
+include_directories(./drivers/icm20948)
 include_directories(${CMAKE_CURRENT_LIST_DIR}/lib/pico-tflmicro/src)
 
 target_link_libraries(
@@ -113,6 +115,7 @@ target_link_libraries(
   font 
   config
   #models
+  icm20948
   pico_stdlib
   hardware_spi 
   hardware_pwm 
@@ -126,6 +129,7 @@ target_link_libraries(
   src
   config
   #models
+  icm20948
   pico_stdlib
   hardware_spi 
   hardware_pwm 
@@ -139,6 +143,7 @@ target_link_libraries(
   src
   config
   #models
+  icm20948
   pico_stdlib
   hardware_spi 
   hardware_pwm 
