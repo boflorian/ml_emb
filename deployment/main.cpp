@@ -3,7 +3,6 @@
 #include <cstdlib> 
 #include <iostream>
 #include <cstring>
-#include <cstdio>
 #include <stdio.h>
 
 #include "pico/stdlib.h"
@@ -67,7 +66,6 @@ void core1_entry() {
 int main(void) 
 {
     System_Init();
-    setvbuf(stdout, NULL, _IONBF, 0); // make USB/UART stdout unbuffered
     printf("System initialized\n");
     mutex_init(&mutex);  // Initialize the mutex
 
@@ -79,7 +77,6 @@ int main(void)
     imuInit(&imu_type);
     if (imu_type != IMU_EN_SENSOR_TYPE_ICM20948) {
         printf("IMU not detected\n");
-        GUI_DisString_EN(10, 70, "ERR: IMU missing", &Font20, WHITE, RED);
         HALT_CORE_1();
     }
     printf("IMU initialized\n");
@@ -92,7 +89,6 @@ int main(void)
     printf("LCD initialized\n");
     reset_inference(&inference);
 	init_gui();
-    GUI_DisString_EN(10, 130, "IMU OK", &Font16, WHITE, BLACK);
 
     // Keep the white background from init_gui()
 
@@ -104,11 +100,9 @@ int main(void)
         // initialize ML model
     if (!ml_model.setup()) {
         printf("Failed to initialize ML model!\n");
-        GUI_DisString_EN(10, 150, "ERR: model init", &Font16, WHITE, RED);
         HALT_CORE_1();
     }
     printf("Model initialized\n");
-    GUI_DisString_EN(10, 150, "Model OK", &Font16, WHITE, BLACK);
     
     uint8_t* test_image_input = ml_model.input_data();
     if (test_image_input == nullptr) {
@@ -127,12 +121,16 @@ int main(void)
     uint8_t imu_buffer[imu_buffer_bytes];
     int buffer_index = 0;
     int loop_counter = 0;
+    bool heartbeat_on = false;
+
+#ifdef PICO_DEFAULT_LED_PIN
+    gpio_init(PICO_DEFAULT_LED_PIN);
+    gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
+    gpio_put(PICO_DEFAULT_LED_PIN, 0);
+#endif
 
     while (true) {
         printf("Entering main loop iteration\n");
-        if ((loop_counter++ % 50) == 0) {
-            GUI_DisString_EN(10, 180, "Collecting IMU...", &Font16, WHITE, BLACK);
-        }
         // Read IMU data
         IMU_ST_SENSOR_DATA gyro, accel;
         imuDataAccGyrGet(&gyro, &accel);
@@ -176,7 +174,6 @@ int main(void)
             printf("Inference result: %d\n", result);
             if (result == -1) {
                 printf("Failed to run inference\n");
-                GUI_DisString_EN(10, 200, "Inference failed", &Font16, WHITE, RED);
             } else {
                 printf("Predicted Gesture: %d\n", result);
                 // Display gesture on LCD
@@ -187,6 +184,15 @@ int main(void)
 
             // Reset buffer
             buffer_index = 0;
+        }
+
+        // Heartbeat: toggle LED and a small on-screen marker so we know the loop is alive
+        if ((loop_counter++ % 50) == 0) {
+            heartbeat_on = !heartbeat_on;
+#ifdef PICO_DEFAULT_LED_PIN
+            gpio_put(PICO_DEFAULT_LED_PIN, heartbeat_on ? 1 : 0);
+#endif
+            GUI_DisString_EN(10, 200, heartbeat_on ? "*" : " ", &Font16, WHITE, BLACK);
         }
 
         sleep_ms(10); // Adjust sampling rate (e.g., 100 Hz)
