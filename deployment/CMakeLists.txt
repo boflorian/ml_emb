@@ -27,8 +27,9 @@ set(PICO_BOARD pico_w CACHE STRING "Board type")
 set(PROGRAM_NAME pico_tflite_inference_test)
 
 # Enable fetching of the Pico SDK if not found locally
-#set(PICO_SDK_PATH "")
-#set(PICO_SDK_FETCH_FROM_GIT ON)
+set(PICO_SDK_PATH "${CMAKE_CURRENT_LIST_DIR}/pico-sdk")
+set(PICO_TOOLCHAIN_PATH "/home/.pico-sdk/toolchain/14_2_Rel1")
+# set(PICO_SDK_FETCH_FROM_GIT ON)
 
 # Include the Pico SDK import script
 include(pico_sdk_import.cmake)
@@ -111,7 +112,7 @@ target_link_libraries(
   lcd 
   font 
   config
-  models
+  #models
   pico_stdlib
   hardware_spi 
   hardware_pwm 
@@ -124,7 +125,7 @@ target_link_libraries(
   main_arena_size_test 
   src
   config
-  models
+  #models
   pico_stdlib
   hardware_spi 
   hardware_pwm 
@@ -137,7 +138,7 @@ target_link_libraries(
   main_inference_test 
   src
   config
-  models
+  #models
   pico_stdlib
   hardware_spi 
   hardware_pwm 

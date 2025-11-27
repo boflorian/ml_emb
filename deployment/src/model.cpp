@@ -5,9 +5,7 @@
 
 #include "model.h"
 #include "model_settings.h"
-// TODO: 4. Import your model data
-
-
+#include "model_data.h" // Ensure this header defines `model_data` and `model_data_len`
 
 Model::Model() :
     model(nullptr),
@@ -23,51 +21,47 @@ Model::~Model()
         delete interpreter;
         interpreter = NULL;
     }
-    if (model != NULL) {
-        delete model;
-        model = NULL;
-    }
     if (input != NULL) {
         delete input;
         input = NULL;
-    }
-    if (error_reporter != NULL) {
-        delete error_reporter;
-        error_reporter = NULL;
     }
 }
 
 int Model::setup() 
 {
-  static tflite::MicroErrorReporter micro_error_reporter;
-  error_reporter = &micro_error_reporter;
+    static tflite::MicroErrorReporter micro_error_reporter;
+    error_reporter = &micro_error_reporter;
 
-  model = tflite::GetModel(/* TODO: 5. Load your model. */);
-  if (model->version() != TFLITE_SCHEMA_VERSION) {
-    TF_LITE_REPORT_ERROR(error_reporter,
-                         "Model provided is schema version %d not equal "
-                         "to supported version %d.",
-                         model->version(), TFLITE_SCHEMA_VERSION);
-    return 0;
-  }
+    // Use model_data_len directly instead of sizeof
+    extern const unsigned int model_data_len;
 
-  static tflite::MicroMutableOpResolver</* TODO: 6. Change operations resolver size. */> micro_op_resolver;
-  // TODO: 7. Add operations according to your model.
-  
-  static uint8_t tensor_arena[arena_size];
-  // Build an interpreter to run the model with.
-  // NOLINTNEXTLINE(runtime-global-variables)
-  static tflite::MicroInterpreter static_interpreter(
-      model, micro_op_resolver, tensor_arena, arena_size);
-  interpreter = &static_interpreter;
+    model = tflite::GetModel(model_data);
+    if (model->version() != TFLITE_SCHEMA_VERSION) {
+        TF_LITE_REPORT_ERROR(error_reporter,
+                             "Model provided is schema version %d not equal "
+                             "to supported version %d.",
+                             model->version(), TFLITE_SCHEMA_VERSION);
+        return 0;
+    }
 
-  // TODO: 8. Allocate tensor
-  
+    static tflite::MicroMutableOpResolver<5> micro_op_resolver; // Adjust size as needed
+    micro_op_resolver.AddFullyConnected();
+    micro_op_resolver.AddConv2D();
+    micro_op_resolver.AddSoftmax();
 
-  // Get information about the memory area to use for the model's input.
-  input = interpreter->input(0);
+    static uint8_t tensor_arena[arena_size];
+    static tflite::MicroInterpreter static_interpreter(
+        model, micro_op_resolver, tensor_arena, arena_size);
+    interpreter = &static_interpreter;
 
-  return 1;
+    if (interpreter->AllocateTensors() != kTfLiteOk) {
+        TF_LITE_REPORT_ERROR(error_reporter, "AllocateTensors() failed");
+        return 0;
+    }
+
+    input = interpreter->input(0);
+
+    return 1;
 }
 
 uint8_t* Model::input_data() {
@@ -87,14 +81,24 @@ int Model::byte_size() {
 int Model::predict()
 {
   printf("Invocation started\n");
-  // TODO: 9. Run invoke inference, if error, return -1
+
+  if (interpreter->Invoke() != kTfLiteOk) {
+    TF_LITE_REPORT_ERROR(error_reporter, "Invoke failed");
+    return -1;
+  }
 
   printf("Invocation finished\n");
 
   TfLiteTensor* output = interpreter->output(0);
 
-  int result = -1;
-  // TODO: 10. Return an index of the output neuron, which has maximum probability.
-  
+  int result = 0;
+  float max_value = output->data.f[0];
+  for (int i = 1; i < output->dims->data[0]; ++i) {
+    if (output->data.f[i] > max_value) {
+      max_value = output->data.f[i];
+      result = i;
+    }
+  }
+
   return result;
 }

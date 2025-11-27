@@ -14,7 +14,7 @@
 
 #include "model.h"
 #include "model_settings.h"
-#include "mnist_model_data.h"
+// #include "mnist_model_data.h"
 
 using namespace std; 
 Model ml_model;

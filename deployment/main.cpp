@@ -17,7 +17,6 @@
 
 #include "model.h"
 #include "model_settings.h"
-#include "mnist_model_data.h"
 
 using namespace std; 
 #define HALT_CORE_1() while (1) { tight_loop_contents(); }
