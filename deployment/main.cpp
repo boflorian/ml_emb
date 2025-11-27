@@ -24,6 +24,9 @@
 using namespace std; 
 #define HALT_CORE_1() while (1) { tight_loop_contents(); }
 
+// Define gesture window size (number of IMU samples per inference)
+#define GESTURE_WINDOW_SIZE 100  // Adjust based on model input size
+
 INFERENCE inference;
 Model ml_model;
 
@@ -103,6 +106,10 @@ int main(void)
         HALT_CORE_1();
     }
 
+    // Buffer for IMU data: GESTURE_WINDOW_SIZE samples * 6 features (ax,ay,az,gx,gy,gz)
+    float imu_buffer[GESTURE_WINDOW_SIZE * 6];
+    int buffer_index = 0;
+
     while (true) {
         // Read IMU data
         IMU_ST_SENSOR_DATA gyro, accel;
@@ -113,10 +120,40 @@ int main(void)
                accel.s16X, accel.s16Y, accel.s16Z,
                gyro.s16X, gyro.s16Y, gyro.s16Z);
 
-        // For gesture recognition, collect data and run inference here
-        // e.g., fill a buffer and predict when ready
+        // Collect data in buffer (normalize to float if needed)
+        imu_buffer[buffer_index * 6 + 0] = (float)accel.s16X / 32768.0f; // Assuming 16-bit signed
+        imu_buffer[buffer_index * 6 + 1] = (float)accel.s16Y / 32768.0f;
+        imu_buffer[buffer_index * 6 + 2] = (float)accel.s16Z / 32768.0f;
+        imu_buffer[buffer_index * 6 + 3] = (float)gyro.s16X / 32768.0f;
+        imu_buffer[buffer_index * 6 + 4] = (float)gyro.s16Y / 32768.0f;
+        imu_buffer[buffer_index * 6 + 5] = (float)gyro.s16Z / 32768.0f;
 
-        sleep_ms(100); // Adjust sampling rate
+        buffer_index++;
+
+        // When buffer is full, run inference
+        if (buffer_index >= GESTURE_WINDOW_SIZE) {
+            // Copy buffer to model input (assuming float input; adjust if quantized)
+            memcpy(test_image_input, imu_buffer, byte_size);
+
+            // Run inference
+            int result = ml_model.predict();
+            if (result == -1) {
+                printf("Failed to run inference\n");
+            } else {
+                printf("Predicted Gesture: %d\n", result);
+                // Display on LCD
+                char str[32];
+                sprintf(str, "Gesture: %d", result);
+                GUI_Clear(BLACK);  // Clear screen
+                GUI_DisString_EN(10, 50, str, &Font24, WHITE, BLACK);
+                GUI_Show();  // Update display
+            }
+
+            // Reset buffer
+            buffer_index = 0;
+        }
+
+        sleep_ms(10); // Adjust sampling rate (e.g., 100 Hz)
     }
     return 0;
 }
