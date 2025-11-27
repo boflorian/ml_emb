@@ -60,7 +60,7 @@ int Model::setup()
         return 0;
     }
 
-    static tflite::MicroMutableOpResolver<15> micro_op_resolver; // Allow more ops
+    static tflite::MicroMutableOpResolver<20> micro_op_resolver; // Allow more ops
     micro_op_resolver.AddFullyConnected();
     micro_op_resolver.AddConv2D();
     micro_op_resolver.AddDepthwiseConv2D();
@@ -73,6 +73,7 @@ int Model::setup()
     micro_op_resolver.AddDequantize();
     micro_op_resolver.AddAdd();
     micro_op_resolver.AddMul();
+    micro_op_resolver.AddExpandDims();
 
     static uint8_t tensor_arena[arena_size];
     static tflite::MicroInterpreter static_interpreter(
