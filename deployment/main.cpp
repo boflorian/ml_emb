@@ -2,6 +2,7 @@
 #include<iostream>
 #include <cstdlib> 
 #include <iostream>
+#include <cstring>
 #include <stdio.h>
 
 #include "pico/stdlib.h"
@@ -29,6 +30,7 @@ using namespace std;
 
 // Define gesture window size (number of IMU samples per inference)
 #define GESTURE_WINDOW_SIZE 100  // Adjust based on model input size
+#define IMU_BYTES_PER_SAMPLE 6   // ax, ay, az, gx, gy, gz
 
 INFERENCE inference;
 Model ml_model;
@@ -111,7 +113,7 @@ int main(void)
         printf("Cannot set input\n");
         HALT_CORE_1();
     }
-    
+
     int byte_size = ml_model.byte_size();
     if (!byte_size) {
         printf("Byte size not found\n");
@@ -119,7 +121,8 @@ int main(void)
     }
 
     // Buffer for IMU data: GESTURE_WINDOW_SIZE samples * 6 features (ax,ay,az,gx,gy,gz)
-    uint8_t imu_buffer[GESTURE_WINDOW_SIZE * 6];
+    const int imu_buffer_bytes = GESTURE_WINDOW_SIZE * IMU_BYTES_PER_SAMPLE;
+    uint8_t imu_buffer[imu_buffer_bytes];
     int buffer_index = 0;
 
     while (true) {
@@ -143,12 +146,13 @@ int main(void)
         float gy = (float)gyro.s16Y / 32768.0f;
         float gz = (float)gyro.s16Z / 32768.0f;
 
-        imu_buffer[buffer_index * 6 + 0] = (uint8_t)((ax + 1.0f) * 127.5f);
-        imu_buffer[buffer_index * 6 + 1] = (uint8_t)((ay + 1.0f) * 127.5f);
-        imu_buffer[buffer_index * 6 + 2] = (uint8_t)((az + 1.0f) * 127.5f);
-        imu_buffer[buffer_index * 6 + 3] = (uint8_t)((gx + 1.0f) * 127.5f);
-        imu_buffer[buffer_index * 6 + 4] = (uint8_t)((gy + 1.0f) * 127.5f);
-        imu_buffer[buffer_index * 6 + 5] = (uint8_t)((gz + 1.0f) * 127.5f);
+        const int write_offset = buffer_index * IMU_BYTES_PER_SAMPLE;
+        imu_buffer[write_offset + 0] = (uint8_t)((ax + 1.0f) * 127.5f);
+        imu_buffer[write_offset + 1] = (uint8_t)((ay + 1.0f) * 127.5f);
+        imu_buffer[write_offset + 2] = (uint8_t)((az + 1.0f) * 127.5f);
+        imu_buffer[write_offset + 3] = (uint8_t)((gx + 1.0f) * 127.5f);
+        imu_buffer[write_offset + 4] = (uint8_t)((gy + 1.0f) * 127.5f);
+        imu_buffer[write_offset + 5] = (uint8_t)((gz + 1.0f) * 127.5f);
 
         buffer_index++;
 
@@ -157,7 +161,12 @@ int main(void)
             printf("Buffer full, running inference\n");
             fflush(stdout);
             // Copy buffer to model input
-            memcpy(test_image_input, imu_buffer, byte_size);
+            const int bytes_to_copy = byte_size < imu_buffer_bytes ? byte_size : imu_buffer_bytes;
+            memcpy(test_image_input, imu_buffer, bytes_to_copy);
+            if (bytes_to_copy < byte_size) {
+                // Zero any remaining input bytes so we don't leave stale data
+                memset(test_image_input + bytes_to_copy, 0, byte_size - bytes_to_copy);
+            }
 
             // Run inference
             int result = ml_model.predict();
