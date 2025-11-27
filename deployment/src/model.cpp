@@ -1,3 +1,6 @@
+#include <cstdarg>
+#include <cstdio>
+
 #include "tensorflow/lite/micro/tflite_bridge/micro_error_reporter.h"
 #include "tensorflow/lite/schema/schema_generated.h"
 #include "tensorflow/lite/micro/micro_mutable_op_resolver.h"
@@ -6,6 +9,18 @@
 #include "model.h"
 #include "model_settings.h"
 #include "model_data.h" // Ensure this header defines `model_data` and `model_data_len`
+
+namespace {
+// Simple reporter that forces messages to printf so we see why setup fails.
+class PicoErrorReporter : public tflite::ErrorReporter {
+ public:
+  int Report(const char* format, va_list args) override {
+    vprintf(format, args);
+    printf("\n");
+    return 0;
+  }
+};
+}  // namespace
 
 Model::Model() :
     model(nullptr),
@@ -29,12 +44,13 @@ Model::~Model()
 
 int Model::setup() 
 {
-    static tflite::MicroErrorReporter micro_error_reporter;
-    error_reporter = &micro_error_reporter;
+    static PicoErrorReporter pico_error_reporter;
+    error_reporter = &pico_error_reporter;
 
     // Use model_data_len directly instead of sizeof
     extern const unsigned int model_data_len;
 
+    printf("Model::setup start\n");
     model = tflite::GetModel(model_data);
     if (model->version() != TFLITE_SCHEMA_VERSION) {
         TF_LITE_REPORT_ERROR(error_reporter,
@@ -44,15 +60,19 @@ int Model::setup()
         return 0;
     }
 
-    static tflite::MicroMutableOpResolver<10> micro_op_resolver; // Increased size for more ops
+    static tflite::MicroMutableOpResolver<15> micro_op_resolver; // Allow more ops
     micro_op_resolver.AddFullyConnected();
     micro_op_resolver.AddConv2D();
+    micro_op_resolver.AddDepthwiseConv2D();
     micro_op_resolver.AddSoftmax();
     micro_op_resolver.AddRelu();
     micro_op_resolver.AddMaxPool2D();
+    micro_op_resolver.AddAveragePool2D();
     micro_op_resolver.AddReshape();
     micro_op_resolver.AddQuantize();
     micro_op_resolver.AddDequantize();
+    micro_op_resolver.AddAdd();
+    micro_op_resolver.AddMul();
 
     static uint8_t tensor_arena[arena_size];
     static tflite::MicroInterpreter static_interpreter(
@@ -66,6 +86,7 @@ int Model::setup()
 
     input = interpreter->input(0);
 
+    printf("Model::setup success\n");
     return 1;
 }
 
