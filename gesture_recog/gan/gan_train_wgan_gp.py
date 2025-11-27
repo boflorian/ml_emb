@@ -23,21 +23,21 @@ from torch.utils.data import DataLoader, Dataset
 
 DATA_ROOT = pathlib.Path("../dataset_magic_wand")
 OUT_ROOT = pathlib.Path("../dataset_magic_wand_gan")
-CATEGORIES = ["slope"]  # run one category at a time
+DEFAULT_CATEGORIES = ["slope"]  # can be overridden via CLI
 
 WIN = 128
 N_CHANNELS = 3
 BATCH_SIZE = 128
 LATENT_DIM = 64
-LR_G = 1e-4
-LR_G = 5e-5
-LR_D = 1e-3
+LR_G = 2e-4
+LR_D = 5e-4
 TOTAL_STEPS = 20000
-N_CRITIC = 7
+N_CRITIC = 5
 GP_LAMBDA = 15.0
+MOMENT_LAMBDA = 2.0
 LOG_EVERY = 100
 CKPT_EVERY = 1000
-N_FAKE_SAVE = 200
+N_FAKE_SAVE = 1000
 
 DEVICE = "mps" if torch.backends.mps.is_available() else (
     "cuda" if torch.cuda.is_available() else "cpu"
@@ -213,12 +213,25 @@ class Generator(nn.Module):
         x = self.deconv(x)[:, :, : self.win]  # [B, C, win]
         x = x.permute(0, 2, 1)  # [B, win, C]
         x = x + self.pos_embed.unsqueeze(0)
-        return torch.tanh(x)
+        return x
+
+
+class MinibatchStdDev(nn.Module):
+    """
+    Adds a channel containing per-batch standard deviation to encourage diversity.
+    """
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: [B, C, T]
+        batch_std = torch.sqrt(x.var(dim=0, unbiased=False) + 1e-8)  # [C, T]
+        mean_std = batch_std.mean().view(1, 1, 1).expand(x.size(0), 1, x.size(2))
+        return torch.cat([x, mean_std], dim=1)
 
 
 class Discriminator(nn.Module):
     def __init__(self, win: int, n_channels: int):
         super().__init__()
+        self.mbstdev = MinibatchStdDev()
         self.net = nn.Sequential(
             spectral_norm(nn.Conv1d(n_channels, 64, kernel_size=5, stride=2, padding=2)),
             nn.LeakyReLU(0.2, inplace=True),
@@ -226,8 +239,9 @@ class Discriminator(nn.Module):
             nn.LeakyReLU(0.2, inplace=True),
             spectral_norm(nn.Conv1d(128, 256, kernel_size=5, stride=2, padding=2)),
             nn.LeakyReLU(0.2, inplace=True),
+            self.mbstdev,
             nn.Flatten(),
-            spectral_norm(nn.Linear((win // 8) * 256, 1)),
+            spectral_norm(nn.Linear((win // 8) * 257, 1)),
         )
 
     def forward(self, x):
@@ -310,6 +324,7 @@ def train_wgan_gp(
     total_steps: int,
     n_critic: int,
     gp_lambda: float,
+    moment_lambda: float,
     log_every: int,
     ckpt_every: int,
     ckpt_dir: pathlib.Path,
@@ -352,6 +367,7 @@ def train_wgan_gp(
         if data_iter is None:
             data_iter = iter(dataloader)
         # ----- Train D for n_critic steps -----
+        real_for_g = None
         for _ in range(n_critic):
             try:
                 real = next(data_iter)
@@ -361,6 +377,7 @@ def train_wgan_gp(
 
             real = normalize_batch(real).to(DEVICE).float()
             B = real.size(0)
+            real_for_g = real
 
             z = torch.randn(B, latent_dim, device=DEVICE)
             fake = G(z)
@@ -377,9 +394,20 @@ def train_wgan_gp(
             opt_D.step()
 
         # ----- Train G -----
+        if real_for_g is None:
+            raise RuntimeError("No real batch available for generator step.")
+
         z = torch.randn(B, latent_dim, device=DEVICE)
         fake = G(z)
-        loss_G = -D(fake).mean()
+        adv_loss = -D(fake).mean()
+        moment_loss = torch.tensor(0.0, device=DEVICE)
+        if moment_lambda > 0:
+            fake_mean = fake.mean(dim=(0, 1))
+            fake_std = fake.std(dim=(0, 1))
+            real_mean = real_for_g.mean(dim=(0, 1))
+            real_std = real_for_g.std(dim=(0, 1))
+            moment_loss = (fake_mean - real_mean).abs().mean() + (fake_std - real_std).abs().mean()
+        loss_G = adv_loss + moment_lambda * moment_loss
 
         opt_G.zero_grad()
         loss_G.backward()
@@ -389,7 +417,7 @@ def train_wgan_gp(
             print(
                 f"Step {step:05d} | loss_D={loss_D.item():.4f} "
                 f"(real={d_real.item():.3f}, fake={d_fake.item():.3f}, gp={gp.item():.3f}) "
-                f"| loss_G={loss_G.item():.4f}"
+                f"| loss_G={loss_G.item():.4f} (adv={adv_loss.item():.4f}, moment={moment_loss.item():.4f})"
             )
 
         if step > 0 and step % ckpt_every == 0:
@@ -457,6 +485,11 @@ def save_sequences_as_txt(
       ax,ay,az
       ...
     """
+    if out_dir.exists():
+        # Remove old .txt files
+        for old_file in out_dir.glob("*.txt"):
+            old_file.unlink()
+
     out_dir.mkdir(parents=True, exist_ok=True)
     fmt = "{:." + str(decimals) + "f}"
 
@@ -466,11 +499,11 @@ def save_sequences_as_txt(
         path = out_dir / fname
 
         with path.open("w") as f:
-            f.write("sample1\\n")
-            f.write("ax,ay,az\\n")
+            f.write("sample1\n")
+            f.write("ax,ay,az\n")
             for t in range(seq.shape[0]):
                 ax, ay, az = seq[t]
-                f.write(f"{fmt.format(ax)},{fmt.format(ay)},{fmt.format(az)}\\n")
+                f.write(f"{fmt.format(ax)},{fmt.format(ay)},{fmt.format(az)}\n")
 
         print(f"Saved {path}")
 
@@ -481,9 +514,21 @@ def save_sequences_as_txt(
 def main():
     parser = argparse.ArgumentParser(description="Train WGAN-GP on IMU gestures.")
     parser.add_argument("--steps", type=int, default=TOTAL_STEPS, help="Total train steps")
+    parser.add_argument(
+        "--categories",
+        nargs="+",
+        default=DEFAULT_CATEGORIES,
+        help="Categories to train on (space separated)",
+    )
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
     parser.add_argument("--n-critic", type=int, default=N_CRITIC, help="D steps per G step")
     parser.add_argument("--gp", type=float, default=GP_LAMBDA, help="Gradient penalty weight")
+    parser.add_argument(
+        "--moment-lambda",
+        type=float,
+        default=MOMENT_LAMBDA,
+        help="Weight for matching per-axis mean/std between real and fake batches",
+    )
     parser.add_argument("--log-every", type=int, default=LOG_EVERY)
     parser.add_argument("--ckpt-every", type=int, default=CKPT_EVERY)
     parser.add_argument("--resume", type=str, default=None, help="Path to checkpoint to resume")
@@ -500,7 +545,11 @@ def main():
     if not data_root.exists():
         raise SystemExit(f"DATA_ROOT {data_root} does not exist.")
 
-    cat_sequences = load_all_samples(data_root, CATEGORIES)
+    categories = [c.strip() for c in args.categories if c.strip()]
+    if not categories:
+        raise SystemExit("No categories provided.")
+
+    cat_sequences = load_all_samples(data_root, categories)
     if not cat_sequences:
         raise SystemExit("No sequences loaded – check categories and paths.")
 
@@ -553,7 +602,7 @@ def main():
             json.dump({"mean": mean.tolist(), "std": std.tolist()}, f, indent=2)
         print(f"Saved normalization stats to {stats_path}")
 
-        for cat in CATEGORIES:
+        for cat in categories:
             out_dir = out_root / cat
             save_sequences_as_txt(
                 fake_denorm, out_dir, base_name="gan_person", start_idx=0
