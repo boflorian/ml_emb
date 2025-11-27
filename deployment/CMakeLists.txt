@@ -26,7 +26,11 @@ endif()
 set(PICO_BOARD pico_w CACHE STRING "Board type")
 set(PROGRAM_NAME pico_tflite_inference_test)
 
-# Pull in Raspberry Pi Pico SDK (must be before project)
+# Enable fetching of the Pico SDK if not found locally
+#set(PICO_SDK_PATH "")
+#set(PICO_SDK_FETCH_FROM_GIT ON)
+
+# Include the Pico SDK import script
 include(pico_sdk_import.cmake)
 
 # project(pico-tflite-inference-test)
@@ -34,6 +38,7 @@ project(${PROGRAM_NAME} C CXX ASM)
 
 # initialize the Pico SDK
 pico_sdk_init()
+message("PICO_SDK_PATH: ${PICO_SDK_PATH}")
 
 
 add_executable(main main.cpp) # main function to run.
@@ -84,6 +89,7 @@ set_target_properties(
 )
 
 
+# Commenting out subdirectories temporarily
 add_subdirectory(src)
 add_subdirectory(models)
 add_subdirectory(lib/pico-tflmicro)
@@ -97,6 +103,7 @@ include_directories(./lib/pico-tflmicro)
 include_directories(./lib/config)
 include_directories(./lib/lcd)
 include_directories(./lib/font)
+include_directories(${CMAKE_CURRENT_LIST_DIR}/lib/pico-tflmicro/src)
 
 target_link_libraries(
   main 
@@ -139,8 +146,8 @@ target_link_libraries(
   pico-tflmicro
 )
 
-pico_set_program_flash(program1 0x140000)
-pico_set_program_flash(program2 0x180000)
+#pico_set_program_flash(program1 0x140000)
+#pico_set_program_flash(program2 0x180000)
 
 # enable usb and uart output
 pico_enable_stdio_usb(main 1)
