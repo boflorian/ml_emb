@@ -36,7 +36,7 @@ using namespace std;
 INFERENCE inference;
 Model ml_model;
 
-mutex_t mutex;  // Declare a mutex
+mutex_t mutex;  
 static bool lcd_ready = false;
 
 enum State { STARTING, RECORDING, INFERING, WAITING };
@@ -167,7 +167,7 @@ int main(void)
     System_Init();
     setvbuf(stdout, NULL, _IONBF, 0); // unbuffered stdout for USB/UART
     printf("System initialized\n");
-    mutex_init(&mutex);  // Initialize the mutex
+    mutex_init(&mutex); 
 
     sleep_ms(5000);
     printf("Sleep done\n");
