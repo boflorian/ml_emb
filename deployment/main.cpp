@@ -133,6 +133,20 @@ int count_digits(int number) {
 }
 
 
+// Add a countdown before the recording starts
+void countdown(int seconds) {
+    for (int i = seconds; i > 0; --i) {
+        printf("Starting in %d...\n", i);
+        GUI_DisString_EN(10, 60, "Starting in...", &Font16, WHITE, BLACK);
+        char countdown_str[16];
+        snprintf(countdown_str, sizeof(countdown_str), "%d", i);
+        GUI_DisString_EN(10, 80, countdown_str, &Font24, WHITE, BLACK);
+        sleep_ms(1000);
+    }
+    GUI_DisString_EN(10, 60, "                ", &Font16, WHITE, BLACK); 
+    GUI_DisString_EN(10, 80, "                ", &Font24, WHITE, BLACK);
+}
+
 // run core0 loop that displays UI and handle user interaction
 void core1_entry() {
     uint16_t cnt=0;
@@ -221,11 +235,11 @@ int main(void)
 #endif
 
     while (true) {
-        printf("Entering main loop iteration, state: %d\n", current_state);
+        // printf("Entering main loop iteration, state: %d\n", current_state);
         
         switch (current_state) {
             case STARTING:
-                // Indicate start of recording
+                countdown(3); // 3-second countdown
                 GUI_DisString_EN(10, 80, "Recording...", &Font16, WHITE, BLACK);
                 buffer_index = 0;
                 current_state = RECORDING;
@@ -238,9 +252,9 @@ int main(void)
                 imuDataAccGyrGet(&gyro, &accel);
 
                 // Print or process the data
-                printf("Accel: X=%d, Y=%d, Z=%d | Gyro: X=%d, Y=%d, Z=%d\n",
-                       accel.s16X, accel.s16Y, accel.s16Z,
-                       gyro.s16X, gyro.s16Y, gyro.s16Z);
+                //printf("Accel: X=%d, Y=%d, Z=%d | Gyro: X=%d, Y=%d, Z=%d\n",
+                //       accel.s16X, accel.s16Y, accel.s16Z,
+                //       gyro.s16X, gyro.s16Y, gyro.s16Z);
 
                 // Collect data in buffer
                 const int write_offset = buffer_index * IMU_BYTES_PER_SAMPLE;
@@ -309,7 +323,8 @@ int main(void)
                 }
                 printf("\n");
                 
-                // Quantize to uint8 using model's quantization parameters
+                // Quantize to uint8 using 
+                
                 for(int i = 0; i < inference_bytes; i++) {
                     float val = inference_buffer_float[i];
                     int quantized = round(val / input_scale) + input_zero_point;
@@ -329,21 +344,21 @@ int main(void)
                 printf("Inference result: %d\n", result);
                 
                 // If classified as negative, take the next most likely gesture
-                if (result == 0) {
-                    float* outputs = ml_model.output_data();
-                    if (outputs != nullptr) {
-                        float max_prob = outputs[1];
-                        int best_non_neg = 1;
-                        for (int i = 2; i < kCategoryCount; ++i) {
-                            if (outputs[i] > max_prob) {
-                                max_prob = outputs[i];
-                                best_non_neg = i;
-                            }
-                        }
-                        result = best_non_neg;
-                        printf("Reclassified from negative to: %d\n", result);
-                    }
-                }
+                //if (result == 0) {
+                //float* outputs = ml_model.output_data();
+                //    if (outputs != nullptr) {
+                //        float max_prob = outputs[1];
+                //        int best_non_neg = 1;
+                //        for (int i = 2; i < kCategoryCount; ++i) {
+                //            if (outputs[i] > max_prob) {
+                //                max_prob = outputs[i];
+                //                best_non_neg = i;
+                //            }
+                //        }
+                //        result = best_non_neg;
+                //        printf("Reclassified from negative to: %d\n", result);
+                //    }
+                //}
                 
                 if (result == -1) {
                     printf("Failed to run inference\n");
@@ -373,7 +388,7 @@ int main(void)
                 break;
         }
 
-        // Heartbeat: toggle LED and a small on-screen marker so we know the loop is alive
+        // Heartbeat: toggle LED and a small on-screen marker (loop alive ???)
         if ((loop_counter++ % 50) == 0) {
             heartbeat_on = !heartbeat_on;
 #ifdef PICO_DEFAULT_LED_PIN
@@ -386,7 +401,7 @@ int main(void)
             GUI_DisString_EN(10, 200, heartbeat_on ? "*" : " ", &Font16, WHITE, BLACK);
         }
 
-        sleep_ms(10); // Adjust sampling rate (e.g., 100 Hz)
+        sleep_ms(10); 
     }
     return 0;
 }
