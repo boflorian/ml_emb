@@ -109,7 +109,7 @@ int Model::setup()
         for (int i = 0; i < input->dims->size; ++i) {
             printf(" %d", input->dims->data[i]);
         }
-        printf(" bytes=%d\n", input->bytes);
+        printf(" bytes=%d scale=%f zero_point=%d\n", input->bytes, input->params.scale, input->params.zero_point);
     }
 
     printf("Model::setup success\n");
@@ -128,6 +128,26 @@ int Model::byte_size() {
     return 0;
   }
   return input->bytes;
+}
+
+float Model::input_scale() {
+  if (input == nullptr) {
+    return 1.0f;
+  }
+  return input->params.scale;
+}
+
+int Model::input_zero_point() {
+  if (input == nullptr) {
+    return 0;
+  }
+  return input->params.zero_point;
+}
+
+float* Model::output_data() {
+    if (interpreter == nullptr) return nullptr;
+    TfLiteTensor* output = interpreter->output(0);
+    return output->data.f;
 }
 
 int Model::predict()

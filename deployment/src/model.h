@@ -16,6 +16,9 @@ class Model {
         int predict();
         uint8_t* input_data();
         int byte_size();
+        float input_scale();
+        int input_zero_point();
+        float* output_data();
         
         const tflite::Model* model = nullptr;
         TfLiteTensor* input = nullptr;
