@@ -353,6 +353,14 @@ def run_pico_training(model_name, build_model_fn, cfg):
     # Save final model
     model.save(run_root / "final_model.keras")
 
+    # Save SavedModel (format should be preferable for TFLite conversion)
+    savedmodel_dir = run_root / "finalmodel"
+    if hasattr(model, "export"):
+        model.export(savedmodel_dir.as_posix())
+    else:
+        import tensorflow as tf
+        tf.saved_model.save(model, savedmodel_dir.as_posix())
+
     # Get best validation accuracy
     best_val_acc = float(max(history.history.get("val_accuracy", [0.0])))
 
