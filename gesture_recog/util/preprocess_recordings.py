@@ -43,6 +43,8 @@ def preprocess_session1(x_raw, swap_axes=True, flip_y=True,
     # → No normalization. Just round/clip to six decimals for more precision.
     x = np.round(x, 6)
     return x
+
+    
 def parse_gesture_file(path: Path):
     """
     Read one sessionX.txt and return list of np.ndarrays for each sample.
@@ -91,7 +93,8 @@ def main():
     )
     p.add_argument("--fs_raw", type=float, default=25)
     p.add_argument("--fs_target", type=float, default=25)
-    # Defaults ON; you can disable with --no-swap / --no-flip if ever needed
+
+
     p.add_argument("--no-swap", dest="swap_axes", action="store_false")
     p.add_argument("--no-flip", dest="flip_y", action="store_false")
     p.set_defaults(swap_axes=True, flip_y=True)

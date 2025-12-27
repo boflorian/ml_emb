@@ -1,0 +1,11 @@
+{
+  "val_subject": 6,
+  "best_val_accuracy": 0.5696969628334045,
+  "last_epoch_metrics": {
+    "accuracy": 0.8908296823501587,
+    "loss": 0.34370842576026917,
+    "val_accuracy": 0.5575757622718811,
+    "val_loss": 6.577199459075928,
+    "learning_rate": 9.999999747378752e-06
+  }
+}

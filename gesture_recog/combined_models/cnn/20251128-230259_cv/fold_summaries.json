@@ -1,0 +1,90 @@
+[
+  {
+    "val_subject": 0,
+    "best_val_accuracy": 0.3333333432674408,
+    "last_epoch_metrics": {
+      "accuracy": 0.8629999756813049,
+      "loss": 0.3903777003288269,
+      "val_accuracy": 0.32098764181137085,
+      "val_loss": 12.139251708984375,
+      "learning_rate": 9.999999747378752e-06
+    }
+  },
+  {
+    "val_subject": 1,
+    "best_val_accuracy": 0.5797872543334961,
+    "last_epoch_metrics": {
+      "accuracy": 0.8947368264198303,
+      "loss": 0.3455840051174164,
+      "val_accuracy": 0.542553186416626,
+      "val_loss": 7.463438034057617,
+      "learning_rate": 9.999999747378752e-06
+    }
+  },
+  {
+    "val_subject": 2,
+    "best_val_accuracy": 0.5449438095092773,
+    "last_epoch_metrics": {
+      "accuracy": 0.8704319000244141,
+      "loss": 0.4163542687892914,
+      "val_accuracy": 0.533707857131958,
+      "val_loss": 4.366186618804932,
+      "learning_rate": 9.999999747378752e-06
+    }
+  },
+  {
+    "val_subject": 3,
+    "best_val_accuracy": 0.5338345766067505,
+    "last_epoch_metrics": {
+      "accuracy": 0.8618143200874329,
+      "loss": 0.4031437635421753,
+      "val_accuracy": 0.518796980381012,
+      "val_loss": 8.82382869720459,
+      "learning_rate": 9.999999747378752e-06
+    }
+  },
+  {
+    "val_subject": 4,
+    "best_val_accuracy": 0.5777778029441833,
+    "last_epoch_metrics": {
+      "accuracy": 0.8657505512237549,
+      "loss": 0.42113196849823,
+      "val_accuracy": 0.5777778029441833,
+      "val_loss": 8.753839492797852,
+      "learning_rate": 9.999999747378752e-06
+    }
+  },
+  {
+    "val_subject": 5,
+    "best_val_accuracy": 0.302325576543808,
+    "last_epoch_metrics": {
+      "accuracy": 0.8502512574195862,
+      "loss": 0.4331519901752472,
+      "val_accuracy": 0.2906976640224457,
+      "val_loss": 14.19417667388916,
+      "learning_rate": 9.999999747378752e-06
+    }
+  },
+  {
+    "val_subject": 6,
+    "best_val_accuracy": 0.5696969628334045,
+    "last_epoch_metrics": {
+      "accuracy": 0.8908296823501587,
+      "loss": 0.34370842576026917,
+      "val_accuracy": 0.5575757622718811,
+      "val_loss": 6.577199459075928,
+      "learning_rate": 9.999999747378752e-06
+    }
+  },
+  {
+    "val_subject": 7,
+    "best_val_accuracy": 0.469565212726593,
+    "last_epoch_metrics": {
+      "accuracy": 0.8664596080780029,
+      "loss": 0.401012659072876,
+      "val_accuracy": 0.40869563817977905,
+      "val_loss": 6.065055847167969,
+      "learning_rate": 9.999999747378752e-06
+    }
+  }
+]
