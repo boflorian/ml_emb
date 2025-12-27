@@ -38,6 +38,7 @@ typedef struct __attribute__((packed))
 #define QUEUE_DEPTH  (8192)      // 8192 * 8B = 64 KB ring -> ~8s at 1 kHz
 static queue_t sample_q;
 
+#define ACCEL_SCALE (1.0f / 16384.0f)
 
 static void die(FRESULT fr, const char *op) 
 {
@@ -137,11 +138,11 @@ static void core1_entry(void)
         while (!RECORD && !STOP_ALL) { tight_loop_contents(); }
         if (STOP_ALL) break;
 
-        printf("[Core1] Writing sample%u to file...\n", SESSION);
+        printf("[Core1] Writing sample%lu to file...\n", SESSION);
 
         // Write sample header for this session
         char header[96];
-        int hdr_len = snprintf(header, sizeof header, "sample%u\nax,ay,az\n", SESSION);
+        int hdr_len = snprintf(header, sizeof header, "sample%lu\nax,ay,az\n", SESSION);
         UINT bw = 0;
         FRESULT fr = f_write(&f, header, (UINT)hdr_len, &bw);
         if (fr != FR_OK || bw != (UINT)hdr_len) die(fr, "f_write(sample header)");
@@ -177,7 +178,7 @@ static void core1_entry(void)
         if (fr != FR_OK || bw != strlen(separator)) die(fr, "f_write(separator)");
 
         f_sync(&f);
-        printf("[Core1] Sample %u written\n", SESSION);
+        printf("[Core1] Sample %lu written\n", SESSION);
 
         last_seen_session = SESSION;
     }
@@ -186,6 +187,63 @@ static void core1_entry(void)
     f_close(&f);
     f_unmount(drive);
     while (1) tight_loop_contents();
+}
+
+// Replace preprocessing functions with those from inference
+static void lowpass_filter(float* x, int length, int window) {
+    float* temp = new float[length];
+    for(int i = 0; i < length; i++) {
+        float sum = 0.0f;
+        int count = 0;
+        for(int j = i - window/2; j <= i + window/2; j++) {
+            if(j >= 0 && j < length) {
+                sum += x[j];
+                count++;
+            }
+        }
+        temp[i] = sum / count;
+    }
+    memcpy(x, temp, length * sizeof(float));
+    delete[] temp;
+}
+
+static void apply_lowpass_filter(float* buffer, int window_size, int window, int features) {
+    for(int axis = 0; axis < features; axis++) {
+        float* axis_data = new float[window_size];
+        for(int t = 0; t < window_size; t++) {
+            axis_data[t] = buffer[t * features + axis];
+        }
+        lowpass_filter(axis_data, window_size, window);
+        for(int t = 0; t < window_size; t++) {
+            buffer[t * features + axis] = axis_data[t];
+        }
+        delete[] axis_data;
+    }
+}
+
+static void normalize_clip(float* buffer, int window_size, int features) {
+    // Clip to [-80, 80]
+    for(int i = 0; i < window_size * features; i++) {
+        if(buffer[i] < -80.0f) buffer[i] = -80.0f;
+        if(buffer[i] > 80.0f) buffer[i] = 80.0f;
+    }
+    // Z-score normalization per axis
+    for(int axis = 0; axis < features; axis++) {
+        float sum = 0.0f;
+        for(int t = 0; t < window_size; t++) {
+            sum += buffer[t * features + axis];
+        }
+        float mean = sum / window_size;
+        float sum_sq = 0.0f;
+        for(int t = 0; t < window_size; t++) {
+            float val = buffer[t * features + axis] - mean;
+            sum_sq += val * val;
+        }
+        float std = sqrt(sum_sq / window_size) + 1e-6f;
+        for(int t = 0; t < window_size; t++) {
+            buffer[t * features + axis] = (buffer[t * features + axis] - mean) / std;
+        }
+    }
 }
 
 int main() 
@@ -206,17 +264,17 @@ int main()
     printf("Device setup complete on core0\n");
     show_color_rgb(0, 255, 0);
 
+    // Update the data collection loop to use the preprocessing functions
     for (uint32_t i = 0; i < RECORD_TIMES; i++) 
-    {     
+    {
         SESSION++;
         printf("\n========================================\n");
-        printf("Starting Sample %u of %u\n", SESSION, RECORD_TIMES);
+        printf("Starting Sample %lu of %lu\n", SESSION, RECORD_TIMES);
         printf("========================================\n");
-        
-        RECORD = true;   
 
+        RECORD = true;
         show_color_rgb(0, 255, 0);
-        
+
         uint32_t start_time = time_us_64();
         while (time_us_64() < start_time + MAX_DATA_COLLECTION_TIME_US) 
         {
@@ -224,28 +282,38 @@ int main()
 
             imu_sample_t s = {
                 .ax = stAccelRawData.s16X, .ay = stAccelRawData.s16Y, .az = stAccelRawData.s16Z,
+                ._pad = {0}
             };
 
-            if (!queue_try_add(&sample_q, &s)) {
+            // Convert raw data to float
+            float data[3] = {
+                (float)s.ax * ACCEL_SCALE,
+                (float)s.ay * ACCEL_SCALE,
+                (float)s.az * ACCEL_SCALE
+            };
+
+            // Apply preprocessing
+            apply_lowpass_filter(data, 1, 1, 3); // Example window size of 1
+            normalize_clip(data, 1, 3);
+
+            // Add preprocessed data to the queue
+            if (!queue_try_add(&sample_q, &data)) {
                 show_color_rgb(0, 0, 255); // overflow indicator
             }
 
-            // sleep_us(1000); // 1 kHz source rate
-            // sleep_us(20000); // 50 Hz source rate
-            // sleep_us(40000); // 25 Hz source rate
             sleep_us(10000); // 100 Hz source rate
         }
 
         RECORD = false;
-        printf("Sample %u completed. Waiting for file write...\n", SESSION);
+        printf("Sample %lu completed. Waiting for file write...\n", SESSION);
 
         // End of session
-        (show_color_rgb(1,1,1), sleep_ms(250),show_color_rgb(0,0,255), sleep_ms(250),show_color_rgb(1,1,1), sleep_ms(250),show_color_rgb(0,0,255), sleep_ms(250)); 
+        (show_color_rgb(1,1,1), sleep_ms(250),show_color_rgb(0,0,255), sleep_ms(250),show_color_rgb(1,1,1), sleep_ms(250),show_color_rgb(0,0,255), sleep_ms(250));
     }
 
     STOP_ALL = true;
     printf("\n========================================\n");
-    printf("All %u samples completed!\n", RECORD_TIMES);
+    printf("All %lu samples completed!\n", RECORD_TIMES);
     printf("========================================\n");
 
     for(;;){ show_color_rgb(0,0,255); sleep_ms(250); show_color_rgb(1,1,1); sleep_ms(250); }
