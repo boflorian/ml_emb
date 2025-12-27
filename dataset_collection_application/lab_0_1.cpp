@@ -189,6 +189,14 @@ static void core1_entry(void)
     while (1) tight_loop_contents();
 }
 
+// Move countdown function outside of main
+static void countdown(int seconds) {
+    for (int i = seconds; i > 0; --i) {
+        printf("Starting in %d...\n", i);
+        sleep_ms(1000);
+    }
+}
+
 // Replace preprocessing functions with those from inference
 static void lowpass_filter(float* x, int length, int window) {
     float* temp = new float[length];
@@ -264,56 +272,64 @@ int main()
     printf("Device setup complete on core0\n");
     show_color_rgb(0, 255, 0);
 
-    // Update the data collection loop to use the preprocessing functions
-    for (uint32_t i = 0; i < RECORD_TIMES; i++) 
-    {
-        SESSION++;
+    // Define gestures and samples per gesture
+    const char* GESTURES[] = {"ring", "wave", "slope", "negative"};
+    const uint32_t NUM_GESTURES = sizeof(GESTURES) / sizeof(GESTURES[0]);
+    const uint32_t SAMPLES_PER_GESTURE = 10; // Configurable number of samples per gesture
+
+    // Update the main loop to iterate through gestures
+    for (uint32_t gesture_index = 0; gesture_index < NUM_GESTURES; ++gesture_index) {
+        const char* current_gesture = GESTURES[gesture_index];
         printf("\n========================================\n");
-        printf("Starting Sample %lu of %lu\n", SESSION, RECORD_TIMES);
+        printf("Next Gesture: %s\n", current_gesture);
         printf("========================================\n");
 
-        RECORD = true;
-        show_color_rgb(0, 255, 0);
+        for (uint32_t sample_index = 0; sample_index < SAMPLES_PER_GESTURE; ++sample_index) {
+            printf("\nRecording sample %lu of %lu for gesture: %s\n", sample_index + 1, SAMPLES_PER_GESTURE, current_gesture);
+            countdown(3); // 3-second countdown
 
-        uint32_t start_time = time_us_64();
-        while (time_us_64() < start_time + MAX_DATA_COLLECTION_TIME_US) 
-        {
-            imuDataOnlyGet(&stGyroRawData, &stAccelRawData);
+            SESSION++;
+            RECORD = true;
+            show_color_rgb(0, 255, 0);
 
-            imu_sample_t s = {
-                .ax = stAccelRawData.s16X, .ay = stAccelRawData.s16Y, .az = stAccelRawData.s16Z,
-                ._pad = {0}
-            };
+            uint32_t start_time = time_us_64();
+            while (time_us_64() < start_time + MAX_DATA_COLLECTION_TIME_US) {
+                imuDataOnlyGet(&stGyroRawData, &stAccelRawData);
 
-            // Convert raw data to float
-            float data[3] = {
-                (float)s.ax * ACCEL_SCALE,
-                (float)s.ay * ACCEL_SCALE,
-                (float)s.az * ACCEL_SCALE
-            };
+                imu_sample_t s = {
+                    .ax = stAccelRawData.s16X, .ay = stAccelRawData.s16Y, .az = stAccelRawData.s16Z,
+                    ._pad = {0}
+                };
 
-            // Apply preprocessing
-            apply_lowpass_filter(data, 1, 1, 3); // Example window size of 1
-            normalize_clip(data, 1, 3);
+                // Convert raw data to float
+                float data[3] = {
+                    (float)s.ax * ACCEL_SCALE,
+                    (float)s.ay * ACCEL_SCALE,
+                    (float)s.az * ACCEL_SCALE
+                };
 
-            // Add preprocessed data to the queue
-            if (!queue_try_add(&sample_q, &data)) {
-                show_color_rgb(0, 0, 255); // overflow indicator
+                // Apply preprocessing
+                apply_lowpass_filter(data, 1, 1, 3); // Example window size of 1
+                normalize_clip(data, 1, 3);
+
+                // Add preprocessed data to the queue
+                if (!queue_try_add(&sample_q, &data)) {
+                    show_color_rgb(0, 0, 255); // overflow indicator
+                }
+
+                sleep_us(10000); // 100 Hz source rate
             }
 
-            sleep_us(10000); // 100 Hz source rate
+            RECORD = false;
+            printf("Sample %lu for gesture %s completed.\n", sample_index + 1, current_gesture);
+            show_color_rgb(1, 1, 1);
+            sleep_ms(250);
         }
-
-        RECORD = false;
-        printf("Sample %lu completed. Waiting for file write...\n", SESSION);
-
-        // End of session
-        (show_color_rgb(1,1,1), sleep_ms(250),show_color_rgb(0,0,255), sleep_ms(250),show_color_rgb(1,1,1), sleep_ms(250),show_color_rgb(0,0,255), sleep_ms(250));
     }
 
     STOP_ALL = true;
     printf("\n========================================\n");
-    printf("All %lu samples completed!\n", RECORD_TIMES);
+    printf("All gestures and samples completed!\n");
     printf("========================================\n");
 
     for(;;){ show_color_rgb(0,0,255); sleep_ms(250); show_color_rgb(1,1,1); sleep_ms(250); }
