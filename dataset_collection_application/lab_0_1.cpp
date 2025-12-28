@@ -211,11 +211,19 @@ static void countdown(int seconds) {
 // Replace preprocessing functions with those from inference
 static void lowpass_filter(float* x, int length, int window) {
     float* temp = new float[length];
-    for(int i = 0; i < length; i++) {
+
+    // Ensure window size is valid
+    if (window <= 0) {
+        printf("Invalid window size: %d\n", window);
+        return;
+    }
+
+    // Apply low-pass filter
+    for (int i = 0; i < length; i++) {
         float sum = 0.0f;
         int count = 0;
-        for(int j = i - window/2; j <= i + window/2; j++) {
-            if(j >= 0 && j < length) {
+        for (int j = i - window / 2; j <= i + window / 2; j++) {
+            if (j >= 0 && j < length) {
                 sum += x[j];
                 count++;
             }
@@ -241,25 +249,38 @@ static void apply_lowpass_filter(float* buffer, int window_size, int window, int
 }
 
 static void normalize_clip(float* buffer, int window_size, int features) {
-    // Clip to [-80, 80]
-    for(int i = 0; i < window_size * features; i++) {
-        if(buffer[i] < -80.0f) buffer[i] = -80.0f;
-        if(buffer[i] > 80.0f) buffer[i] = 80.0f;
+    // Skip normalization for small window sizes
+    if (window_size <= 1) {
+        printf("Skipping normalization for window size: %d\n", window_size);
+        return;
     }
+
+    // Clip to [-80, 80] and log clipped values
+    for (int i = 0; i < window_size * features; i++) {
+        if (buffer[i] < -80.0f) buffer[i] = -80.0f;
+        if (buffer[i] > 80.0f) buffer[i] = 80.0f;
+    }
+
     // Z-score normalization per axis
-    for(int axis = 0; axis < features; axis++) {
+    for (int axis = 0; axis < features; axis++) {
         float sum = 0.0f;
-        for(int t = 0; t < window_size; t++) {
+        for (int t = 0; t < window_size; t++) {
             sum += buffer[t * features + axis];
         }
         float mean = sum / window_size;
+
         float sum_sq = 0.0f;
-        for(int t = 0; t < window_size; t++) {
+        for (int t = 0; t < window_size; t++) {
             float val = buffer[t * features + axis] - mean;
             sum_sq += val * val;
         }
-        float std = sqrt(sum_sq / window_size) + 1e-6f;
-        for(int t = 0; t < window_size; t++) {
+        float std = sqrt(sum_sq / window_size);
+        if (std < 1e-6f) {
+            printf("Axis %d std too small, skipping normalization\n", axis);
+            continue;
+        }
+
+        for (int t = 0; t < window_size; t++) {
             buffer[t * features + axis] = (buffer[t * features + axis] - mean) / std;
         }
     }
@@ -279,7 +300,13 @@ int main()
 
     IMU_EN_SENSOR_TYPE enMotionSensorType;
     IMU_ST_SENSOR_DATA stGyroRawData, stAccelRawData;
+    printf("Initializing IMU...\n");
     imuInit(&enMotionSensorType);
+    if (enMotionSensorType == IMU_EN_SENSOR_TYPE_NULL) {
+        printf("IMU initialization failed. Sensor type: NULL\n");
+    } else {
+        printf("IMU initialized successfully. Sensor type: ICM20948\n");
+    }
     printf("Device setup complete on core0\n");
     show_color_rgb(0, 255, 0);
 
@@ -325,6 +352,10 @@ int main()
                 // Apply preprocessing
                 apply_lowpass_filter(data, 1, 1, 3); // Example window size of 1
                 normalize_clip(data, 1, 3);
+
+                // Debug prints to log raw and preprocessed accelerometer data
+                printf("Raw accelerometer data: ax=%d, ay=%d, az=%d\n", s.ax, s.ay, s.az);
+                printf("Preprocessed accelerometer data: ax=%.2f, ay=%.2f, az=%.2f\n", data[0], data[1], data[2]);
 
                 // Add preprocessed data to the queue
                 if (!queue_try_add(&sample_q, &data)) {
