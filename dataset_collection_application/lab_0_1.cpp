@@ -108,13 +108,20 @@ static const char *sd_mount_or_format(FATFS *pfs, int card_num)
     return drive;
 }
 
-static void open_log_file(FIL *f, const char *drive, const char *prefix) {
+static void open_log_file(FIL *f, const char *drive, const char *gesture, const char *prefix) {
     char path[96];
+    char dir_path[96];
+
+    // Create directory for the gesture
+    snprintf(dir_path, sizeof dir_path, "%s/%s", drive, gesture);
+    FRESULT fr = f_mkdir(dir_path);
+    if (fr != FR_OK && fr != FR_EXIST) die(fr, "f_mkdir");
+
+    // Create file path within the gesture directory
     uint64_t t = time_us_64();
+    snprintf(path, sizeof path, "%s/%s_%llu.txt", dir_path, prefix, (unsigned long long)t);
 
-    snprintf(path, sizeof path, "%s/%s_%llu.txt", drive, prefix, (unsigned long long)t);
-
-    FRESULT fr = f_open(f, path, FA_WRITE | FA_CREATE_ALWAYS);
+    fr = f_open(f, path, FA_WRITE | FA_CREATE_ALWAYS);
     if (fr != FR_OK) die(fr, "f_open");
     printf("logging to: %s\n", path);
 }
@@ -126,11 +133,14 @@ static void core1_entry(void)
 
     uint32_t last_seen_session = 0;
 
-    // Open single file for all sessions
-    FIL f;
-    open_log_file(&f, drive, FILE_NAME_PREFIX);
-
     for (;;) {
+        // Wait for gesture name from core0
+        const char* gesture = (const char*)multicore_fifo_pop_blocking();
+
+        // Open single file for all sessions within the gesture folder
+        FIL f;
+        open_log_file(&f, drive, gesture, FILE_NAME_PREFIX);
+
         while (SESSION == last_seen_session && !STOP_ALL) { tight_loop_contents(); }
         if (STOP_ALL) break;
 
@@ -149,10 +159,10 @@ static void core1_entry(void)
 
         uint32_t lines_since_sync = 0;
         imu_sample_t s;
-        
+
         // Wait for data to start arriving in the queue
         while (RECORD && queue_is_empty(&sample_q)) { tight_loop_contents(); }
-        
+
         for (;;) 
         {
             // Use non-blocking check to avoid getting stuck
@@ -161,7 +171,7 @@ static void core1_entry(void)
                 tight_loop_contents();
                 continue;
             }
-            
+
             char line[96];
             int n = snprintf(line, sizeof line, "%d,%d,%d\n",
                                 s.ax, s.ay, s.az);
@@ -181,10 +191,11 @@ static void core1_entry(void)
         printf("[Core1] Sample %lu written\n", SESSION);
 
         last_seen_session = SESSION;
+
+        f_sync(&f);
+        f_close(&f);
     }
 
-    f_sync(&f);
-    f_close(&f);
     f_unmount(drive);
     while (1) tight_loop_contents();
 }
@@ -277,7 +288,7 @@ int main()
     const uint32_t NUM_GESTURES = sizeof(GESTURES) / sizeof(GESTURES[0]);
     const uint32_t SAMPLES_PER_GESTURE = 10; // Configurable number of samples per gesture
 
-    // Update the main loop to iterate through gestures
+    // Update the main loop to pass gesture names to core1
     for (uint32_t gesture_index = 0; gesture_index < NUM_GESTURES; ++gesture_index) {
         const char* current_gesture = GESTURES[gesture_index];
         printf("\n========================================\n");
@@ -291,6 +302,9 @@ int main()
             SESSION++;
             RECORD = true;
             show_color_rgb(0, 255, 0);
+
+            // Pass gesture name to core1 for file handling
+            multicore_fifo_push_blocking((uintptr_t)current_gesture);
 
             uint32_t start_time = time_us_64();
             while (time_us_64() < start_time + MAX_DATA_COLLECTION_TIME_US) {
