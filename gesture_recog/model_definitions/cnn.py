@@ -35,7 +35,7 @@ def _res_block(x, filters, kernel_size, reg=None, dilation_rate=1, residual=Fals
     return x
 
 
-def build_cnn(win=64, num_classes=4, lr=1e-3, l2=None, dropout=None):
+def build_cnn(win=64, num_classes=4, lr=1e-3, l2=None, dropout=None, total_steps=None, lr_alpha=0.1):
     # Coerce optional args
     dp = float(dropout) if dropout is not None else 0.0          # Dropout needs a float
     reg = regularizers.l2(l2) if (l2 is not None and l2 > 0) else None
@@ -65,8 +65,18 @@ def build_cnn(win=64, num_classes=4, lr=1e-3, l2=None, dropout=None):
     out = layers.Dense(num_classes, activation="softmax")(x)
 
     model = keras.Model(inputs, out)
+    if total_steps is not None and total_steps > 0:
+        lr_schedule = keras.optimizers.schedules.CosineDecay(
+            initial_learning_rate=float(lr),
+            decay_steps=int(total_steps),
+            alpha=float(lr_alpha),
+        )
+        optimizer = keras.optimizers.SGD(learning_rate=lr_schedule, momentum=0.9, nesterov=True)
+    else:
+        optimizer = keras.optimizers.SGD(learning_rate=float(lr), momentum=0.9, nesterov=True)
+
     model.compile(
-        optimizer=keras.optimizers.AdamW(learning_rate=float(lr), weight_decay=1e-4, clipnorm=1.0),
+        optimizer=optimizer,
         loss=keras.losses.SparseCategoricalCrossentropy(),
         metrics=["accuracy"],
     )

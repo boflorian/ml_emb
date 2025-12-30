@@ -1,0 +1,23 @@
+{
+  "win": 64,
+  "hop": 64,
+  "lp_window": 7,
+  "batch_size": 16,
+  "epochs": 2000,
+  "num_classes": 4,
+  "lr": 5e-05,
+  "l2": 0.002,
+  "dropout": 0.3,
+  "augment": true,
+  "model_name": "cnn",
+  "class_names": [
+    "negative",
+    "ring",
+    "slope",
+    "wave"
+  ],
+  "cv": {
+    "folds": 5,
+    "seed": 42
+  }
+}

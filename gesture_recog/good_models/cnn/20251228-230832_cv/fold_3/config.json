@@ -1,0 +1,18 @@
+{
+  "win": 256,
+  "hop": 64,
+  "lp_window": 7,
+  "batch_size": 16,
+  "epochs": 50,
+  "num_classes": 4,
+  "lr": 5e-05,
+  "l2": 0.005,
+  "dropout": 0.25,
+  "augment": true,
+  "split": {
+    "fold": 3,
+    "train_size": 110,
+    "val_size": 26,
+    "seed": 42
+  }
+}

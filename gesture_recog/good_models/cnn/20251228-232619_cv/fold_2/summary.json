@@ -1,0 +1,11 @@
+{
+  "fold": 2,
+  "best_val_accuracy": 0.6480000019073486,
+  "last_epoch_metrics": {
+    "accuracy": 0.6707070469856262,
+    "loss": 4.373429775238037,
+    "val_accuracy": 0.6399999856948853,
+    "val_loss": 4.872657299041748,
+    "learning_rate": 9.999999747378752e-06
+  }
+}
