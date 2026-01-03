@@ -43,20 +43,8 @@ message("PICO_SDK_PATH: ${PICO_SDK_PATH}")
 
 
 add_executable(main main.cpp) # main function to run.
-add_executable(main_arena_size_test arena_size_test.cpp) # to check arena size for a given model.
-add_executable(main_inference_test inference_test.cpp) # to test hand written digit recognition with static test data.
 
 target_include_directories(main
-  PRIVATE
-  ${CMAKE_CURRENT_LIST_DIR}/.
-)
-
-target_include_directories(main_arena_size_test
-  PRIVATE
-  ${CMAKE_CURRENT_LIST_DIR}/.
-)
-
-target_include_directories(main_inference_test
   PRIVATE
   ${CMAKE_CURRENT_LIST_DIR}/.
 )
@@ -64,24 +52,6 @@ target_include_directories(main_inference_test
 
 set_target_properties(
   main
-  PROPERTIES
-  COMPILE_FLAGS -fno-rtti
-  COMPILE_FLAGS -fno-exceptions
-  COMPILE_FLAGS -fno-threadsafe-statics
-  COMPILE_FLAGS -nostdlib
-)
-
-set_target_properties(
-  main_arena_size_test
-  PROPERTIES
-  COMPILE_FLAGS -fno-rtti
-  COMPILE_FLAGS -fno-exceptions
-  COMPILE_FLAGS -fno-threadsafe-statics
-  COMPILE_FLAGS -nostdlib
-)
-
-set_target_properties(
-  main_inference_test
   PROPERTIES
   COMPILE_FLAGS -fno-rtti
   COMPILE_FLAGS -fno-exceptions
@@ -124,34 +94,6 @@ target_link_libraries(
   pico-tflmicro
 )
 
-target_link_libraries(
-  main_arena_size_test 
-  src
-  config
-  models
-  icm20948
-  pico_stdlib
-  hardware_spi 
-  hardware_pwm 
-  pico_multicore 
-  hardware_adc
-  pico-tflmicro
-)
-
-target_link_libraries(
-  main_inference_test 
-  src
-  config
-  models
-  icm20948
-  pico_stdlib
-  hardware_spi 
-  hardware_pwm 
-  pico_multicore 
-  hardware_adc
-  pico-tflmicro
-)
-
 #pico_set_program_flash(program1 0x140000)
 #pico_set_program_flash(program2 0x180000)
 
@@ -159,16 +101,6 @@ target_link_libraries(
 pico_enable_stdio_usb(main 1)
 pico_enable_stdio_uart(main 1)
 
-pico_enable_stdio_usb(main_arena_size_test 1)
-pico_enable_stdio_uart(main_arena_size_test 1)
-
-
-pico_enable_stdio_usb(main_inference_test 1)
-pico_enable_stdio_uart(main_inference_test 1)
-
 # create map/bin/hex/uf2 file etc.
 pico_add_extra_outputs(main)
 
-pico_add_extra_outputs(main_arena_size_test)
-
-pico_add_extra_outputs(main_inference_test)

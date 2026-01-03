@@ -29,9 +29,16 @@ using namespace std;
 #define HALT_CORE_1() while (1) { tight_loop_contents(); }
 
 // Define recording and inference parameters
-#define RECORDING_SAMPLES 300  // 3 seconds at 100 Hz
-#define INFERENCE_WINDOW 64    // Model input size
-#define IMU_BYTES_PER_SAMPLE 6 // ax, ay, az, gx, gy, gz
+#define RECORDING_SAMPLES 300   // 3 seconds at 100 Hz
+#define INFERENCE_WINDOW 286     // Model input size per gesture window
+#define IMU_FEATURES 3          // ax, ay, az (match lab_0_1 data flow)
+#define ACCEL_SCALE (1.0f / 16384.0f)
+
+
+
+// maybe remove later 
+#define MOTION_THRESHOLD_G 0.12f   // minimum acceleration magnitude to treat as motion
+#define DEBUG_SAMPLE_PRINTS 6      // number of samples to dump for debugging
 
 INFERENCE inference;
 Model ml_model;
@@ -214,24 +221,29 @@ int main(void)
     }
     printf("Model initialized\n");
     
-    float input_scale = ml_model.input_scale();
-    int input_zero_point = ml_model.input_zero_point();
-    printf("Input quantization: scale=%f, zero_point=%d\n", input_scale, input_zero_point);
+    // Note: Model input is float32, no quantization needed
+    // Sanity check: model input size vs our prepared window (features x window)
+    const int model_input_bytes = ml_model.byte_size();
+    const int prepared_input_bytes = INFERENCE_WINDOW * IMU_FEATURES * sizeof(float); // float32
+    if (model_input_bytes != prepared_input_bytes) {
+         printf("Warning: model expects %d bytes but pipeline prepares %d bytes (INFERENCE_WINDOW=%d, FEATURES=%d)\n",
+             model_input_bytes, prepared_input_bytes, INFERENCE_WINDOW, IMU_FEATURES);
+         // We still proceed and zero-fill the remaining bytes below, but adjust either the
+         // model input shape or INFERENCE_WINDOW/IMU_FEATURES so they match.
+    }
     
-    uint8_t* test_image_input = ml_model.input_data();
+    float* test_image_input = ml_model.input_data();
     if (test_image_input == nullptr) {
         fatal_error("Cannot get model input");
     }
 
-    int byte_size = ml_model.byte_size();
+    int byte_size = model_input_bytes;
     if (!byte_size) {
         fatal_error("Byte size not found");
     }
 
-    // Buffer for IMU data: RECORDING_SAMPLES samples * 6 features
-    const int imu_buffer_bytes = RECORDING_SAMPLES * IMU_BYTES_PER_SAMPLE;
-    const int imu_float_elements = imu_buffer_bytes;
-    uint8_t imu_buffer[RECORDING_SAMPLES * IMU_BYTES_PER_SAMPLE];  // For inference input
+    // Buffer for IMU data: RECORDING_SAMPLES samples * 3 accel features
+    const int imu_float_elements = RECORDING_SAMPLES * IMU_FEATURES;
     float imu_buffer_float[imu_float_elements];
     float magnitudes[RECORDING_SAMPLES];  // Store motion magnitudes
     int buffer_index = 0;
@@ -251,13 +263,15 @@ int main(void)
         switch (current_state) {
             case STARTING:
                 countdown(3); // 3-second countdown
-                GUI_DisString_EN(10, 80, "Recording...", &Font16, WHITE, BLACK);
                 buffer_index = 0;
                 current_state = RECORDING;
                 state_counter = 0;
                 break;
                 
             case RECORDING: {
+                // Ensure recording indicator is shown on serial
+                printf("Recording...\n");
+                
                 // Read IMU data
                 IMU_ST_SENSOR_DATA gyro, accel;
                 imuDataAccGyrGet(&gyro, &accel);
@@ -268,13 +282,19 @@ int main(void)
                 //       gyro.s16X, gyro.s16Y, gyro.s16Z);
 
                 // Collect data in buffer
-                const int write_offset = buffer_index * IMU_BYTES_PER_SAMPLE;
-                imu_buffer_float[write_offset + 0] = (float)accel.s16X;
-                imu_buffer_float[write_offset + 1] = (float)accel.s16Y;
-                imu_buffer_float[write_offset + 2] = (float)accel.s16Z;
-                imu_buffer_float[write_offset + 3] = (float)gyro.s16X;
-                imu_buffer_float[write_offset + 4] = (float)gyro.s16Y;
-                imu_buffer_float[write_offset + 5] = (float)gyro.s16Z;
+                const int write_offset = buffer_index * IMU_FEATURES;
+                imu_buffer_float[write_offset + 0] = (float)accel.s16X * ACCEL_SCALE;
+                imu_buffer_float[write_offset + 1] = (float)accel.s16Y * ACCEL_SCALE;
+                imu_buffer_float[write_offset + 2] = (float)accel.s16Z * ACCEL_SCALE;
+
+                if (buffer_index < DEBUG_SAMPLE_PRINTS) {
+                    printf("[DBG] Sample %d raw(ax,ay,az)=(%d,%d,%d) scaled=(%.4f,%.4f,%.4f)\n",
+                           buffer_index,
+                           accel.s16X, accel.s16Y, accel.s16Z,
+                           imu_buffer_float[write_offset + 0],
+                           imu_buffer_float[write_offset + 1],
+                           imu_buffer_float[write_offset + 2]);
+                }
 
                 // Compute motion magnitude (using acceleration)
                 float ax = (float)accel.s16X / 32768.0f;  // Normalize to -1 to 1
@@ -302,52 +322,60 @@ int main(void)
                         max_magnitude_index = i;
                     }
                 }
-                printf("Max magnitude at sample %d: %.2f\n", max_magnitude_index, max_magnitude);
+
+                // Activity recognition: clip leading idle samples
+                int active_start = 0;
+                while (active_start < RECORDING_SAMPLES && magnitudes[active_start] < MOTION_THRESHOLD_G) {
+                    active_start++;
+                }
+                if (active_start >= RECORDING_SAMPLES) {
+                    active_start = 0; // all quiet, fall back to start
+                }
+
+                printf("[DBG] Max magnitude idx=%d val=%.2f | active_start=%d (thr=%.2fg)\n",
+                       max_magnitude_index, max_magnitude, active_start, MOTION_THRESHOLD_G);
                 
-                // Extract INFERENCE_WINDOW samples centered on max_magnitude_index
+                // Extract INFERENCE_WINDOW samples prioritizing active region
                 const int half_window = INFERENCE_WINDOW / 2;
                 int start_sample = max_magnitude_index - half_window;
                 if(start_sample < 0) start_sample = 0;
+                if(start_sample < active_start) start_sample = active_start;
                 int end_sample = start_sample + INFERENCE_WINDOW - 1;
                 if(end_sample >= RECORDING_SAMPLES) {
                     end_sample = RECORDING_SAMPLES - 1;
                     start_sample = end_sample - INFERENCE_WINDOW + 1;
                     if(start_sample < 0) start_sample = 0;
                 }
+                printf("[DBG] Window start=%d end=%d (size=%d)\n", start_sample, end_sample, INFERENCE_WINDOW);
                 
-                const int inference_bytes = INFERENCE_WINDOW * IMU_BYTES_PER_SAMPLE;
-                float inference_buffer_float[inference_bytes];
-                uint8_t inference_buffer[inference_bytes];
+                const int inference_elements = INFERENCE_WINDOW * IMU_FEATURES;
+                float inference_buffer_float[inference_elements];
                 
                 // Copy the selected window
-                const int start_offset = start_sample * IMU_BYTES_PER_SAMPLE;
-                memcpy(inference_buffer_float, imu_buffer_float + start_offset, inference_bytes * sizeof(float));
-                
-                // Apply preprocessing to the inference window
-                apply_lowpass_filter(inference_buffer_float, INFERENCE_WINDOW, 7, IMU_BYTES_PER_SAMPLE);
-                normalize_clip(inference_buffer_float, INFERENCE_WINDOW, IMU_BYTES_PER_SAMPLE);
-                
+                const int start_offset = start_sample * IMU_FEATURES;
+                memcpy(inference_buffer_float, imu_buffer_float + start_offset, inference_elements * sizeof(float));
+
+                // Apply preprocessing to match training pipeline
+                apply_lowpass_filter(inference_buffer_float, INFERENCE_WINDOW, 5, IMU_FEATURES); // window=5 for lowpass
+                // Clip to [-80, 80] only (skip Z-score normalization to match training)
+                for (int i = 0; i < inference_elements; i++) {
+                    if (inference_buffer_float[i] < -80.0f) inference_buffer_float[i] = -80.0f;
+                    if (inference_buffer_float[i] > 80.0f) inference_buffer_float[i] = 80.0f;
+                }
+
                 // Debug: print some preprocessed values
-                printf("Preprocessed samples: ");
-                for(int i = 0; i < 10 && i < inference_bytes; i++) {
+                printf("[DBG] Window floats: ");
+                for(int i = 0; i < 10 && i < inference_elements; i++) {
                     printf("%.2f ", inference_buffer_float[i]);
                 }
                 printf("\n");
                 
-                // Quantize to uint8 using 
-                
-                for(int i = 0; i < inference_bytes; i++) {
-                    float val = inference_buffer_float[i];
-                    int quantized = round(val / input_scale) + input_zero_point;
-                    inference_buffer[i] = (uint8_t)std::max(0, std::min(255, quantized));
-                }
-                
-                // Copy to model input
-                const int bytes_to_copy = byte_size < inference_bytes ? byte_size : inference_bytes;
-                memcpy(test_image_input, inference_buffer, bytes_to_copy);
-                if (bytes_to_copy < byte_size) {
-                    // Zero any remaining input bytes so we don't leave stale data
-                    memset(test_image_input + bytes_to_copy, 0, byte_size - bytes_to_copy);
+                // Copy to model input (float32, no quantization)
+                const int floats_to_copy = byte_size / sizeof(float);
+                memcpy(test_image_input, inference_buffer_float, floats_to_copy * sizeof(float));
+                if (floats_to_copy < (INFERENCE_WINDOW * IMU_FEATURES)) {
+                    // Zero any remaining input floats so we don't leave stale data
+                    memset(test_image_input + floats_to_copy, 0, (INFERENCE_WINDOW * IMU_FEATURES - floats_to_copy) * sizeof(float));
                 }
 
                 // Run inference

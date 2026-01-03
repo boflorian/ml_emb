@@ -51,6 +51,10 @@ int Model::setup()
     extern const unsigned int model_data_len;
 
     printf("Model::setup start\n");
+    printf("Model blob length: %u\n", model_data_len);
+    printf("Model blob first 16 bytes: ");
+    for (int i = 0; i < 16; ++i) printf("%02X ", model_data[i]);
+    printf("\n");
     model = tflite::GetModel(model_data);
     if (model->version() != TFLITE_SCHEMA_VERSION) {
         TF_LITE_REPORT_ERROR(error_reporter,
@@ -85,13 +89,14 @@ int Model::setup()
     micro_op_resolver.AddRsqrt();
     micro_op_resolver.AddStridedSlice();
     micro_op_resolver.AddPad();
-    micro_op_resolver.AddMul();         // already added; harmless
-    micro_op_resolver.AddAdd();         // already added; harmless
+    micro_op_resolver.AddSpaceToBatchNd();
+    micro_op_resolver.AddBatchToSpaceNd();
     micro_op_resolver.AddSquare();
     micro_op_resolver.AddSquaredDifference();
     micro_op_resolver.AddMaximum();
     micro_op_resolver.AddMinimum();
     micro_op_resolver.AddCast();
+    micro_op_resolver.AddNeg();
 
     static uint8_t tensor_arena[arena_size];
     static tflite::MicroInterpreter static_interpreter(
@@ -116,11 +121,11 @@ int Model::setup()
     return 1;
 }
 
-uint8_t* Model::input_data() {
+float* Model::input_data() {
   if (input == nullptr) {
     return nullptr;
   }
-  return input->data.uint8;
+  return input->data.f;
 }
 
 int Model::byte_size() {

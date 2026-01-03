@@ -36,7 +36,7 @@ void inference_test(void)
     }
     printf("Model initialized\n");
     
-    uint8_t* test_image_input = ml_model.input_data();
+    float* test_image_input = ml_model.input_data();
     if (test_image_input == nullptr) {
         printf("Cannot set input\n");
         HALT_CORE_1();
