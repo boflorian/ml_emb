@@ -17,20 +17,50 @@ import shutil
 import sys
 
 
-def try_convert_from_keras(model): 
+def representative_dataset():
+    """
+    Generator function for representative dataset used in quantization.
+    This should yield sample inputs that represent the data distribution.
+    For gesture recognition, use preprocessed IMU windows.
+    """
+    # Example: Generate random samples in the expected range [-80, 80] for 286 timesteps, 3 features
+    import numpy as np
+    for _ in range(100):  # 100 samples
+        # Shape: [1, 286, 3] to match model input
+        sample = np.random.uniform(-80.0, 80.0, (1, 286, 3)).astype(np.float32)
+        yield [sample]
+
+
+def try_convert_from_keras(model, quantize=False): 
     print('Trying to convert from keras...')
     converter = tf.lite.TFLiteConverter.from_keras_model(model)
+    
+    if quantize:
+        print("[INFO]  - enabling INT8 quantization")
+        converter.optimizations = [tf.lite.Optimize.DEFAULT]
+        converter.representative_dataset = representative_dataset
+        converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
+        converter.inference_input_type = tf.int8
+        converter.inference_output_type = tf.int8
+    
     return converter.convert()
 
 
-def try_convert_from_savedmodel(saved_model_dir, optimize=False, use_select_tf_ops=False): 
+def try_convert_from_savedmodel(saved_model_dir, optimize=False, use_select_tf_ops=False, quantize=False): 
     print('Trying to convert from saved model...')
     print(f"[INFO]  - creating TFLiteConverter.from_saved_model({saved_model_dir})")
     converter = tf.lite.TFLiteConverter.from_saved_model(saved_model_dir)
 
-    if optimize:
-        print("[INFO]  - enabling default optimizations")
+    if optimize or quantize:
+        print("[INFO]  - enabling optimizations")
         converter.optimizations = [tf.lite.Optimize.DEFAULT]
+        
+        if quantize:
+            print("[INFO]  - enabling INT8 quantization")
+            converter.representative_dataset = representative_dataset
+            converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
+            converter.inference_input_type = tf.int8
+            converter.inference_output_type = tf.int8
 
     if use_select_tf_ops:
         print("[INFO]  - enabling SELECT_TF_OPS")
@@ -43,7 +73,7 @@ def try_convert_from_savedmodel(saved_model_dir, optimize=False, use_select_tf_o
 
 
 def convert_to_tflite(model_path: Path, tflite_output_path: Path,
-                      optimize: bool = False, use_select_tf_ops: bool = False) -> None:
+                      optimize: bool = False, use_select_tf_ops: bool = False, quantize: bool = False) -> None:
     """
     Load a .keras model or SavedModel directory and convert it to TFLite.
     """
@@ -51,7 +81,7 @@ def convert_to_tflite(model_path: Path, tflite_output_path: Path,
         # SavedModel directory
         print(f"Converting SavedModel from directory: {model_path}")
         tflite_model = try_convert_from_savedmodel(
-            str(model_path), optimize=optimize, use_select_tf_ops=use_select_tf_ops
+            str(model_path), optimize=optimize, use_select_tf_ops=use_select_tf_ops, quantize=quantize
         )
     else:
         # .keras file
@@ -60,7 +90,7 @@ def convert_to_tflite(model_path: Path, tflite_output_path: Path,
 
         try:
             print("[INFO] Converting (direct from Keras)...")
-            tflite_model = try_convert_from_keras(model)
+            tflite_model = try_convert_from_keras(model, quantize=quantize)
         except Exception as e:
             print("[WARN] Direct Keras → TFLite conversion failed:")
             print(f"       {type(e).__name__}: {e}")
@@ -72,7 +102,7 @@ def convert_to_tflite(model_path: Path, tflite_output_path: Path,
                 print(f"[INFO]  - exporting SavedModel to {saved_model_dir}")
                 tf.saved_model.save(model, saved_model_dir.as_posix())
                 tflite_model = try_convert_from_savedmodel(
-                    saved_model_dir.as_posix(), optimize=optimize, use_select_tf_ops=use_select_tf_ops
+                    saved_model_dir.as_posix(), optimize=optimize, use_select_tf_ops=use_select_tf_ops, quantize=quantize
                 )
             finally:
                 # clean up temp dir
@@ -89,6 +119,8 @@ def main():
                         help="Path to the Keras model file (.keras) or SavedModel directory")
     parser.add_argument("--optimize", action="store_true",
                         help="Enable TFLite optimizations")
+    parser.add_argument("--quantize", action="store_true",
+                        help="Enable INT8 quantization (requires representative dataset)")
     parser.add_argument("--select-tf-ops", action="store_true",
                         help="Use SELECT_TF_OPS for broader op support")
 
@@ -123,7 +155,7 @@ def main():
     tflite_output_path = output_dir / out_name
 
     convert_to_tflite(model_path, tflite_output_path, 
-                     optimize=args.optimize, use_select_tf_ops=args.select_tf_ops)
+                     optimize=args.optimize, use_select_tf_ops=args.select_tf_ops, quantize=args.quantize)
 
 
 if __name__ == "__main__":
