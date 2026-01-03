@@ -76,25 +76,36 @@ void apply_lowpass_filter(float* buffer, int window_size, int window, int featur
 }
 
 void normalize_clip(float* buffer, int window_size, int features) {
-    // Clip to [-80, 80]
-    for(int i = 0; i < window_size * features; i++) {
-        if(buffer[i] < -80.0f) buffer[i] = -80.0f;
-        if(buffer[i] > 80.0f) buffer[i] = 80.0f;
+    // Skip normalization for small window sizes
+    if (window_size <= 1) {
+        return;
     }
+
+    // Clip to [-80, 80]
+    for (int i = 0; i < window_size * features; i++) {
+        if (buffer[i] < -80.0f) buffer[i] = -80.0f;
+        if (buffer[i] > 80.0f) buffer[i] = 80.0f;
+    }
+
     // Z-score normalization per axis
-    for(int axis = 0; axis < features; axis++) {
+    for (int axis = 0; axis < features; axis++) {
         float sum = 0.0f;
-        for(int t = 0; t < window_size; t++) {
+        for (int t = 0; t < window_size; t++) {
             sum += buffer[t * features + axis];
         }
         float mean = sum / window_size;
+
         float sum_sq = 0.0f;
-        for(int t = 0; t < window_size; t++) {
+        for (int t = 0; t < window_size; t++) {
             float val = buffer[t * features + axis] - mean;
             sum_sq += val * val;
         }
-        float std = sqrt(sum_sq / window_size) + 1e-6f;
-        for(int t = 0; t < window_size; t++) {
+        float std = sqrt(sum_sq / window_size);
+        if (std < 1e-6f) {
+            continue;
+        }
+
+        for (int t = 0; t < window_size; t++) {
             buffer[t * features + axis] = (buffer[t * features + axis] - mean) / std;
         }
     }
