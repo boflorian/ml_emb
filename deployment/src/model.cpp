@@ -180,20 +180,58 @@ int Model::predict()
   
   int result = 0;
   
+  // Bias correction to counteract model bias towards certain classes
+  // Positive values boost a class, negative values penalize
+  // Classes: 0=negative, 1=ring, 2=slope, 3=wave
+  // Tune these values based on observed bias
+  static const int output_bias[4] = {
+      100,   // boost negative (was always -127/-128)
+      50,    // boost ring slightly
+      100,   // boost slope (was always -127/-128)
+      -100   // penalize wave (model is biased towards it)
+  };
+  
   // Check if output is quantized (int8) or float
   if (output->type == kTfLiteInt8) {
       // INT8 quantized output
       int8_t* output_int8 = output->data.int8;
-      int8_t max_value = output_int8[0];
+      
+      // Apply bias correction and find max
+      int corrected_scores[4];
       printf("Output scores (int8): ");
       for (int i = 0; i < num_classes; ++i) {
           printf("%d ", output_int8[i]);
-          if (output_int8[i] > max_value) {
-              max_value = output_int8[i];
+          corrected_scores[i] = (int)output_int8[i] + output_bias[i];
+      }
+      printf("\n");
+      
+      printf("Bias-corrected scores: ");
+      int max_corrected = corrected_scores[0];
+      int second_max = -999;
+      int second_idx = -1;
+      for (int i = 0; i < num_classes; ++i) {
+          printf("%d ", corrected_scores[i]);
+          if (corrected_scores[i] > max_corrected) {
+              second_max = max_corrected;
+              second_idx = result;
+              max_corrected = corrected_scores[i];
               result = i;
+          } else if (corrected_scores[i] > second_max) {
+              second_max = corrected_scores[i];
+              second_idx = i;
           }
       }
       printf("\n");
+      
+      // Print confidence info
+      int margin = max_corrected - second_max;
+      printf("Top: class %d (%d), Second: class %d (%d), Margin: %d\n", 
+             result, max_corrected, second_idx, second_max, margin);
+      
+      // If margin is very small, flag as uncertain
+      if (margin < 20) {
+          printf("WARNING: Low confidence (margin=%d < 20)\n", margin);
+      }
   } else {
       // Float output
       float max_value = output->data.f[0];
