@@ -663,5 +663,219 @@
         "f1_score": 1.0
       }
     }
+  },
+  {
+    "timestamp": "2025-12-30T22:25:02.795413",
+    "mode": "both",
+    "models": [
+      "cnn"
+    ],
+    "parallel": false,
+    "dataset": "good",
+    "cnn": {
+      "model_name": "cnn",
+      "hyperparameters": {
+        "win": 286,
+        "hop": null,
+        "lp_window": 7,
+        "batch_size": 16,
+        "epochs": 500,
+        "num_classes": 4,
+        "lr": 0.005,
+        "l2": 0.05,
+        "dropout": 0.25,
+        "augment": false
+      },
+      "cv_metrics": {
+        "mean_val_acc": 1.0,
+        "std_val_acc": 0.0,
+        "individual_folds": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "good_metrics": {
+        "accuracy": 0.9919354838709677,
+        "precision": 0.99213217938631,
+        "f1_score": 0.9919315013938671
+      }
+    }
+  },
+  {
+    "timestamp": "2025-12-30T22:33:18.799656",
+    "mode": "inference",
+    "models": [
+      "cnn"
+    ],
+    "parallel": false,
+    "dataset": "good",
+    "cnn": {
+      "model_name": "cnn",
+      "hyperparameters": {
+        "win": 286,
+        "hop": null,
+        "lp_window": 7,
+        "batch_size": 16,
+        "epochs": 500,
+        "num_classes": 4,
+        "lr": 0.005,
+        "l2": 0.05,
+        "dropout": 0.25,
+        "augment": false
+      },
+      "good_metrics": {
+        "accuracy": 0.9919354838709677,
+        "precision": 0.99213217938631,
+        "f1_score": 0.9919315013938671
+      }
+    }
+  },
+  {
+    "timestamp": "2025-12-30T22:39:41.993992",
+    "mode": "inference",
+    "models": [
+      "cnn"
+    ],
+    "parallel": false,
+    "dataset": "good",
+    "cnn": {
+      "model_name": "cnn",
+      "hyperparameters": {
+        "win": 286,
+        "hop": null,
+        "lp_window": 7,
+        "batch_size": 16,
+        "epochs": 500,
+        "num_classes": 4,
+        "lr": 0.005,
+        "l2": 0.05,
+        "dropout": 0.25,
+        "augment": false
+      },
+      "good_metrics": {
+        "accuracy": 0.9919354838709677,
+        "precision": 0.99213217938631,
+        "f1_score": 0.9919315013938671
+      }
+    }
+  },
+  {
+    "timestamp": "2025-12-30T22:41:45.520717",
+    "mode": "inference",
+    "models": [
+      "cnn"
+    ],
+    "parallel": false,
+    "dataset": "good",
+    "cnn": {
+      "model_name": "cnn",
+      "hyperparameters": {
+        "win": 286,
+        "hop": null,
+        "lp_window": 7,
+        "batch_size": 16,
+        "epochs": 500,
+        "num_classes": 4,
+        "lr": 0.005,
+        "l2": 0.05,
+        "dropout": 0.25,
+        "augment": false
+      },
+      "good_metrics": {
+        "accuracy": 0.9919354838709677,
+        "precision": 0.99213217938631,
+        "f1_score": 0.9919315013938671
+      }
+    }
+  },
+  {
+    "timestamp": "2025-12-30T22:45:48.058405",
+    "mode": "inference",
+    "models": [
+      "cnn"
+    ],
+    "parallel": false,
+    "dataset": "good",
+    "cnn": {
+      "model_name": "cnn",
+      "hyperparameters": {
+        "win": 286,
+        "hop": null,
+        "lp_window": 7,
+        "batch_size": 16,
+        "epochs": 500,
+        "num_classes": 4,
+        "lr": 0.005,
+        "l2": 0.05,
+        "dropout": 0.25,
+        "augment": false
+      },
+      "good_metrics": {
+        "accuracy": 0.9919354838709677,
+        "precision": 0.99213217938631,
+        "f1_score": 0.9919315013938671
+      }
+    }
+  },
+  {
+    "timestamp": "2025-12-30T22:52:25.632727",
+    "mode": "inference",
+    "models": [
+      "cnn"
+    ],
+    "parallel": false,
+    "dataset": "good",
+    "cnn": {
+      "model_name": "cnn",
+      "hyperparameters": {
+        "win": 286,
+        "hop": null,
+        "lp_window": 7,
+        "batch_size": 16,
+        "epochs": 500,
+        "num_classes": 4,
+        "lr": 0.005,
+        "l2": 0.05,
+        "dropout": 0.25,
+        "augment": false
+      },
+      "good_metrics": {
+        "accuracy": 0.9919354838709677,
+        "precision": 0.99213217938631,
+        "f1_score": 0.9919315013938671
+      }
+    }
+  },
+  {
+    "timestamp": "2025-12-30T23:00:02.643614",
+    "mode": "inference",
+    "models": [
+      "cnn"
+    ],
+    "parallel": false,
+    "dataset": "good",
+    "cnn": {
+      "model_name": "cnn",
+      "hyperparameters": {
+        "win": 286,
+        "hop": null,
+        "lp_window": 7,
+        "batch_size": 16,
+        "epochs": 500,
+        "num_classes": 4,
+        "lr": 0.005,
+        "l2": 0.05,
+        "dropout": 0.25,
+        "augment": false
+      },
+      "good_metrics": {
+        "accuracy": 0.9919354838709677,
+        "precision": 0.99213217938631,
+        "f1_score": 0.9919315013938671
+      }
+    }
   }
 ]

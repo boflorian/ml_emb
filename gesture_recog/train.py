@@ -254,6 +254,32 @@ def find_best_ensemble_run(model_name):
     return best_run
 
 
+def load_best_fold_model(run_root):
+    summaries_path = run_root / "fold_summaries.json"
+    if not summaries_path.exists():
+        raise FileNotFoundError(f"No fold summaries found in {run_root}")
+    with summaries_path.open("r") as f:
+        fold_summaries = json.load(f)
+    best_fold = None
+    best_acc = -1.0
+    for summary in fold_summaries:
+        acc = float(summary.get("best_val_accuracy", -1.0))
+        fold_idx = summary.get("fold")
+        if fold_idx is None:
+            continue
+        if acc > best_acc:
+            best_acc = acc
+            best_fold = fold_idx
+    if best_fold is None:
+        raise FileNotFoundError(f"No valid fold entries in {summaries_path}")
+    ckpt_path = run_root / f"fold_{best_fold}" / "checkpoints" / "best_valacc.keras"
+    if not ckpt_path.exists():
+        raise FileNotFoundError(f"Best fold checkpoint not found: {ckpt_path}")
+    model = keras.models.load_model(ckpt_path)
+    print(f"Loaded best fold model: fold {best_fold} (val acc {best_acc:.4f})")
+    return model, best_fold, best_acc
+
+
 
 
 # -----------------------------
@@ -703,7 +729,31 @@ def run_inference(models, run_root, cfg):
     (run_root / "metrics_good_cnn.json").write_text(json.dumps(metrics, indent=2))
 
 
-def distill_ensemble(models, cfg, run_root, epochs=20, alpha=0.5):
+def export_best_fold_model(run_root, cfg):
+    model, best_fold, best_acc = load_best_fold_model(run_root)
+    export_path = run_root / "best_fold_model.keras"
+    model.save(export_path)
+    print(f"Saved best fold model to {export_path}")
+    savedmodel_dir = run_root / "best_fold_model_savedmodel"
+    if hasattr(model, "export"):
+        model.export(savedmodel_dir.as_posix())
+    else:
+        tf.saved_model.save(model, savedmodel_dir.as_posix())
+    print(f"Saved best fold model SavedModel to {savedmodel_dir}")
+
+    ds = build_good_eval_dataset(
+        dataset_root=GOOD_ROOT,
+        batch_size=cfg["batch_size"],
+        win=cfg["win"],
+    )
+    metrics = evaluate_on_dataset(model, ds, class_names=CATEGORIES, threshold=0.0)
+    metrics["best_fold"] = best_fold
+    metrics["best_fold_val_acc"] = best_acc
+    (run_root / "metrics_good_cnn_best_fold.json").write_text(json.dumps(metrics, indent=2))
+    return model
+
+
+def distill_ensemble(models, cfg, run_root, epochs=50, alpha=0.1, temperature=3.0, optimizer_name="adam"):
     all_samples = _collect_all_samples(GOOD_ROOT)
     if not all_samples:
         raise RuntimeError("No samples found in dataset_good for distillation.")
@@ -721,7 +771,10 @@ def distill_ensemble(models, cfg, run_root, epochs=20, alpha=0.5):
     )
 
     student = build_cnn(win=cfg["win"], num_classes=cfg["num_classes"], lr=cfg["lr"], l2=cfg["l2"])
-    optimizer = student.optimizer
+    if optimizer_name == "adam":
+        optimizer = keras.optimizers.Adam(learning_rate=cfg["lr"])
+    else:
+        optimizer = keras.optimizers.SGD(learning_rate=cfg["lr"], momentum=0.9, nesterov=True)
     hard_loss_fn = keras.losses.SparseCategoricalCrossentropy()
     soft_loss_fn = keras.losses.KLDivergence()
 
@@ -737,8 +790,10 @@ def distill_ensemble(models, cfg, run_root, epochs=20, alpha=0.5):
                 teacher_probs = teacher_probs / float(len(models))
 
                 student_probs = student(xb, training=True)
+                teacher_soft = tf.nn.softmax(tf.math.log(teacher_probs + 1e-9) / temperature, axis=-1)
+                student_soft = tf.nn.softmax(tf.math.log(student_probs + 1e-9) / temperature, axis=-1)
                 hard_loss = hard_loss_fn(yb, student_probs)
-                soft_loss = soft_loss_fn(teacher_probs, student_probs)
+                soft_loss = soft_loss_fn(teacher_soft, student_soft) * (temperature ** 2)
                 loss = alpha * hard_loss + (1.0 - alpha) * soft_loss
 
             grads = tape.gradient(loss, student.trainable_variables)
@@ -746,6 +801,7 @@ def distill_ensemble(models, cfg, run_root, epochs=20, alpha=0.5):
 
             losses.append(float(loss.numpy()))
             preds = tf.argmax(student_probs, axis=1)
+            preds = tf.cast(preds, yb.dtype)
             accs.append(float(tf.reduce_mean(tf.cast(preds == yb, tf.float32)).numpy()))
 
         print(f"[DISTILL] Epoch {epoch}/{epochs} loss={np.mean(losses):.4f} acc={np.mean(accs):.4f}")
@@ -852,8 +908,12 @@ def main():
                         help="Distill the ensemble into a single model file.")
     parser.add_argument("--distill-epochs", type=int, default=20,
                         help="Epochs for ensemble distillation.")
-    parser.add_argument("--distill-alpha", type=float, default=0.5,
+    parser.add_argument("--distill-alpha", type=float, default=0.1,
                         help="Weight for hard-label loss during distillation.")
+    parser.add_argument("--distill-temperature", type=float, default=3.0,
+                        help="Softmax temperature for distillation.")
+    parser.add_argument("--distill-optimizer", choices=["adam", "sgd"], default="adam",
+                        help="Optimizer for distillation.")
     args = parser.parse_args()
 
     # Create logs directory
@@ -931,6 +991,7 @@ def main():
 
         print(f"\n=== Evaluating {model_name.upper()} on dataset_good ===")
         run_inference(models[model_name], run_roots[model_name], CNN_CONFIG)
+        export_best_fold_model(run_roots[model_name], CNN_CONFIG)
         if args.distill_ensemble:
             distill_ensemble(
                 models[model_name],
@@ -938,6 +999,8 @@ def main():
                 run_roots[model_name],
                 epochs=args.distill_epochs,
                 alpha=args.distill_alpha,
+                temperature=args.distill_temperature,
+                optimizer_name=args.distill_optimizer,
             )
 
         metrics_path = run_roots[model_name] / "metrics_good_cnn.json"
