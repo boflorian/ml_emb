@@ -5,6 +5,6 @@ const char* kCategoryLabels[kCategoryCount] = {
     "negative",
     "ring",
     "slope",
-    "wing",
+    "wave",
 };
 

@@ -121,11 +121,11 @@ int Model::setup()
     return 1;
 }
 
-float* Model::input_data() {
+uint8_t* Model::input_data() {
   if (input == nullptr) {
     return nullptr;
   }
-  return input->data.f;
+  return input->data.uint8;
 }
 
 int Model::byte_size() {
@@ -168,13 +168,44 @@ int Model::predict()
 
   TfLiteTensor* output = interpreter->output(0);
 
+  // Debug: print output tensor info
+  printf("Output type=%d dims:", output->type);
+  for (int i = 0; i < output->dims->size; ++i) {
+      printf(" %d", output->dims->data[i]);
+  }
+  printf("\n");
+
+  // Get number of classes (last dimension)
+  int num_classes = output->dims->data[output->dims->size - 1];
+  
   int result = 0;
-  float max_value = output->data.f[0];
-  for (int i = 1; i < output->dims->data[0]; ++i) {
-    if (output->data.f[i] > max_value) {
-      max_value = output->data.f[i];
-      result = i;
-    }
+  
+  // Check if output is quantized (int8) or float
+  if (output->type == kTfLiteInt8) {
+      // INT8 quantized output
+      int8_t* output_int8 = output->data.int8;
+      int8_t max_value = output_int8[0];
+      printf("Output scores (int8): ");
+      for (int i = 0; i < num_classes; ++i) {
+          printf("%d ", output_int8[i]);
+          if (output_int8[i] > max_value) {
+              max_value = output_int8[i];
+              result = i;
+          }
+      }
+      printf("\n");
+  } else {
+      // Float output
+      float max_value = output->data.f[0];
+      printf("Output scores (float): ");
+      for (int i = 0; i < num_classes; ++i) {
+          printf("%.4f ", output->data.f[i]);
+          if (output->data.f[i] > max_value) {
+              max_value = output->data.f[i];
+              result = i;
+          }
+      }
+      printf("\n");
   }
 
   return result;

@@ -42,7 +42,7 @@ pico_sdk_init()
 message("PICO_SDK_PATH: ${PICO_SDK_PATH}")
 
 
-add_executable(main main.cpp) # main function to run.
+add_executable(main main.cpp models/model_data.cc) # main function to run.
 
 target_include_directories(main
   PRIVATE

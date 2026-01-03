@@ -221,10 +221,12 @@ int main(void)
     }
     printf("Model initialized\n");
     
-    // Note: Model input is float32, no quantization needed
+    float input_scale = ml_model.input_scale();
+    int input_zero_point = ml_model.input_zero_point();
+    printf("Input quantization: scale=%f, zero_point=%d\n", input_scale, input_zero_point);
     // Sanity check: model input size vs our prepared window (features x window)
     const int model_input_bytes = ml_model.byte_size();
-    const int prepared_input_bytes = INFERENCE_WINDOW * IMU_FEATURES * sizeof(float); // float32
+    const int prepared_input_bytes = INFERENCE_WINDOW * IMU_FEATURES; // uint8 after quantization
     if (model_input_bytes != prepared_input_bytes) {
          printf("Warning: model expects %d bytes but pipeline prepares %d bytes (INFERENCE_WINDOW=%d, FEATURES=%d)\n",
              model_input_bytes, prepared_input_bytes, INFERENCE_WINDOW, IMU_FEATURES);
@@ -232,7 +234,7 @@ int main(void)
          // model input shape or INFERENCE_WINDOW/IMU_FEATURES so they match.
     }
     
-    float* test_image_input = ml_model.input_data();
+    uint8_t* test_image_input = ml_model.input_data();
     if (test_image_input == nullptr) {
         fatal_error("Cannot get model input");
     }
@@ -257,6 +259,9 @@ int main(void)
     gpio_put(PICO_DEFAULT_LED_PIN, 0);
 #endif
 
+    // Hardcoding the model size instead of including the header
+    constexpr size_t arena_size = 287512 + 1024; // Model size + buffer for interpreter
+
     while (true) {
         // printf("Entering main loop iteration, state: %d\n", current_state);
         
@@ -269,37 +274,26 @@ int main(void)
                 break;
                 
             case RECORDING: {
-                // Ensure recording indicator is shown on serial
-                printf("Recording...\n");
+                // Print recording indicator only once at the start
+                if (buffer_index == 0) {
+                    printf("Recording...\n");
+                }
                 
                 // Read IMU data
                 IMU_ST_SENSOR_DATA gyro, accel;
                 imuDataAccGyrGet(&gyro, &accel);
 
-                // Print or process the data
-                //printf("Accel: X=%d, Y=%d, Z=%d | Gyro: X=%d, Y=%d, Z=%d\n",
-                //       accel.s16X, accel.s16Y, accel.s16Z,
-                //       gyro.s16X, gyro.s16Y, gyro.s16Z);
-
-                // Collect data in buffer
+                // Collect data in buffer - convert to g-units to match training data
+                // Training data uses ACCEL_SCALE = 1/16384 (same as lab_0_1.cpp)
                 const int write_offset = buffer_index * IMU_FEATURES;
-                imu_buffer_float[write_offset + 0] = (float)accel.s16X * ACCEL_SCALE;
+                imu_buffer_float[write_offset + 0] = (float)accel.s16X * ACCEL_SCALE;  // Convert to g-units
                 imu_buffer_float[write_offset + 1] = (float)accel.s16Y * ACCEL_SCALE;
                 imu_buffer_float[write_offset + 2] = (float)accel.s16Z * ACCEL_SCALE;
 
-                if (buffer_index < DEBUG_SAMPLE_PRINTS) {
-                    printf("[DBG] Sample %d raw(ax,ay,az)=(%d,%d,%d) scaled=(%.4f,%.4f,%.4f)\n",
-                           buffer_index,
-                           accel.s16X, accel.s16Y, accel.s16Z,
-                           imu_buffer_float[write_offset + 0],
-                           imu_buffer_float[write_offset + 1],
-                           imu_buffer_float[write_offset + 2]);
-                }
-
-                // Compute motion magnitude (using acceleration)
-                float ax = (float)accel.s16X / 32768.0f;  // Normalize to -1 to 1
-                float ay = (float)accel.s16Y / 32768.0f;
-                float az = (float)accel.s16Z / 32768.0f;
+                // Compute motion magnitude (using acceleration in g-units)
+                float ax = imu_buffer_float[write_offset + 0];
+                float ay = imu_buffer_float[write_offset + 1];
+                float az = imu_buffer_float[write_offset + 2];
                 magnitudes[buffer_index] = sqrt(ax*ax + ay*ay + az*az);
 
                 buffer_index++;
@@ -357,25 +351,65 @@ int main(void)
 
                 // Apply preprocessing to match training pipeline
                 apply_lowpass_filter(inference_buffer_float, INFERENCE_WINDOW, 5, IMU_FEATURES); // window=5 for lowpass
-                // Clip to [-80, 80] only (skip Z-score normalization to match training)
+                
+                // Clip to [-80, 80] first
                 for (int i = 0; i < inference_elements; i++) {
                     if (inference_buffer_float[i] < -80.0f) inference_buffer_float[i] = -80.0f;
                     if (inference_buffer_float[i] > 80.0f) inference_buffer_float[i] = 80.0f;
                 }
+                
+                // Z-score normalization per axis (matches training normalize_clip)
+                for (int axis = 0; axis < IMU_FEATURES; axis++) {
+                    float sum = 0.0f;
+                    for (int t = 0; t < INFERENCE_WINDOW; t++) {
+                        sum += inference_buffer_float[t * IMU_FEATURES + axis];
+                    }
+                    float mean = sum / INFERENCE_WINDOW;
+                    
+                    float sum_sq = 0.0f;
+                    for (int t = 0; t < INFERENCE_WINDOW; t++) {
+                        float val = inference_buffer_float[t * IMU_FEATURES + axis] - mean;
+                        sum_sq += val * val;
+                    }
+                    float std = sqrt(sum_sq / INFERENCE_WINDOW) + 1e-6f;
+                    
+                    for (int t = 0; t < INFERENCE_WINDOW; t++) {
+                        inference_buffer_float[t * IMU_FEATURES + axis] = 
+                            (inference_buffer_float[t * IMU_FEATURES + axis] - mean) / std;
+                    }
+                }
+                
+                // NOTE: Scaling disabled - testing with direct Z-score normalized values
+                // If this works, the model expects normalized input directly
+                // If not, we need to re-quantize the model properly
 
-                // Debug: print some preprocessed values
+                // Debug: print some preprocessed values (now Z-score normalized, ~[-3, 3])
                 printf("[DBG] Window floats: ");
                 for(int i = 0; i < 10 && i < inference_elements; i++) {
                     printf("%.2f ", inference_buffer_float[i]);
                 }
                 printf("\n");
                 
-                // Copy to model input (float32, no quantization)
-                const int floats_to_copy = byte_size / sizeof(float);
-                memcpy(test_image_input, inference_buffer_float, floats_to_copy * sizeof(float));
-                if (floats_to_copy < (INFERENCE_WINDOW * IMU_FEATURES)) {
-                    // Zero any remaining input floats so we don't leave stale data
-                    memset(test_image_input + floats_to_copy, 0, (INFERENCE_WINDOW * IMU_FEATURES - floats_to_copy) * sizeof(float));
+                // Quantize to int8 (signed) - model uses INT8 quantization with zero_point around -1
+                int8_t inference_buffer[inference_elements];
+                for(int i = 0; i < inference_elements; i++) {
+                    float val = inference_buffer_float[i];
+                    int quantized = round(val / input_scale) + input_zero_point;
+                    inference_buffer[i] = (int8_t)std::max(-128, std::min(127, quantized));
+                }
+
+                printf("[DBG] Window quantized: ");
+                for(int i = 0; i < 10 && i < inference_elements; i++) {
+                    printf("%d ", inference_buffer[i]);
+                }
+                printf("\n");
+                
+                // Copy to model input (cast to uint8_t* for memcpy, but data is int8)
+                const int bytes_to_copy = byte_size < inference_elements ? byte_size : inference_elements;
+                memcpy(test_image_input, inference_buffer, bytes_to_copy);
+                if (bytes_to_copy < byte_size) {
+                    // Zero any remaining input bytes so we don't leave stale data
+                    memset(test_image_input + bytes_to_copy, 0, byte_size - bytes_to_copy);
                 }
 
                 // Run inference

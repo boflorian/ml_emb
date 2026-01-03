@@ -18,4 +18,5 @@ target_link_libraries(
   PUBLIC 
   pico_stdlib 
   pico-tflmicro
+  models
 )

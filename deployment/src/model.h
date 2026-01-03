@@ -14,7 +14,7 @@ class Model {
 
         int setup();
         int predict();
-        float* input_data();
+        uint8_t* input_data();
         int byte_size();
         float input_scale();
         int input_zero_point();
