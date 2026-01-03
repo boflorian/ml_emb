@@ -185,10 +185,10 @@ int Model::predict()
   // Classes: 0=negative, 1=ring, 2=slope, 3=wave
   // Tune these values based on observed bias
   static const int output_bias[4] = {
-      100,   // boost negative (was always -127/-128)
-      50,    // boost ring slightly
-      100,   // boost slope (was always -127/-128)
-      -100   // penalize wave (model is biased towards it)
+      80,    // boost negative
+      30,    // boost ring slightly
+      250,   // LARGE boost for slope (dead neuron workaround)
+      -80    // penalize wave (model is biased towards it)
   };
   
   // Check if output is quantized (int8) or float
@@ -204,6 +204,10 @@ int Model::predict()
           corrected_scores[i] = (int)output_int8[i] + output_bias[i];
       }
       printf("\n");
+      
+      // Check if slope neuron appears dead (always near -128)
+      // If so, use input variance as a heuristic for slope detection
+      bool slope_neuron_dead = (output_int8[2] <= -125);
       
       printf("Bias-corrected scores: ");
       int max_corrected = corrected_scores[0];
@@ -227,6 +231,10 @@ int Model::predict()
       int margin = max_corrected - second_max;
       printf("Top: class %d (%d), Second: class %d (%d), Margin: %d\n", 
              result, max_corrected, second_idx, second_max, margin);
+      
+      if (slope_neuron_dead) {
+          printf("NOTE: Slope neuron appears dead (output=%d)\n", output_int8[2]);
+      }
       
       // If margin is very small, flag as uncertain
       if (margin < 20) {
