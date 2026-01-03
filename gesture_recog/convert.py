@@ -22,12 +22,15 @@ def representative_dataset():
     Generator function for representative dataset used in quantization.
     This should yield sample inputs that represent the data distribution.
     For gesture recognition, use preprocessed IMU windows.
+    
+    After preprocessing (lowpass + Z-score normalization), data is approximately
+    in range [-3, 3] with mean=0 and std=1.
     """
-    # Example: Generate random samples in the expected range [-80, 80] for 286 timesteps, 3 features
     import numpy as np
     for _ in range(100):  # 100 samples
         # Shape: [1, 286, 3] to match model input
-        sample = np.random.uniform(-80.0, 80.0, (1, 286, 3)).astype(np.float32)
+        # Use normal distribution to match Z-score normalized data (mean=0, std=1)
+        sample = np.random.randn(1, 286, 3).astype(np.float32)
         yield [sample]
 
 
