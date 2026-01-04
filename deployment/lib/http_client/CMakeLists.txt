@@ -10,4 +10,7 @@ target_link_libraries(http_client PUBLIC
 	pico_lwip_http
 )
 
+# Ensure lwIP uses our local config.
+target_compile_definitions(http_client PUBLIC PICO_LWIP_CONFIG_FILE="lib/http_client/lwipopts.h")
+
 # HTTP only; TLS disabled for lower RAM usage.
