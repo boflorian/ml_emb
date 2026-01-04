@@ -28,4 +28,5 @@ obj/
 
 .ipynb_checkpoints
 
-
+# Local Wi-Fi credentials
+deployment/wifi_config.h
