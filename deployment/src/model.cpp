@@ -169,11 +169,12 @@ int Model::predict()
   TfLiteTensor* output = interpreter->output(0);
 
   // Debug: print output tensor info
-  printf("Output type=%d dims:", output->type);
+  //printf("Output type=%d dims:", output->type);
   for (int i = 0; i < output->dims->size; ++i) {
-      printf(" %d", output->dims->data[i]);
+      //printf(" %d", output->dims->data[i]);
   }
-  printf("\n");
+  //printf("\n");
+
 
   // Get number of classes (last dimension)
   int num_classes = output->dims->data[output->dims->size - 1];
@@ -185,10 +186,10 @@ int Model::predict()
   // Classes: 0=negative, 1=ring, 2=slope, 3=wave
   // Tune these values based on observed bias
   static const int output_bias[4] = {
-      50,    // boost negative
+      70,    // boost negative
       100,    // boost ring slightly
-      80,   // LARGE boost for slope (dead neuron workaround)
-      -150    // penalize wave (model is biased towards it)
+      40,   // LARGE boost for slope (dead neuron workaround)
+      -180    // penalize wave (model is biased towards it)
   };
   
   // Check if output is quantized (int8) or float
@@ -198,23 +199,23 @@ int Model::predict()
       
       // Apply bias correction and find max
       int corrected_scores[4];
-      printf("Output scores (int8): ");
+      //printf("Output scores (int8): ");
       for (int i = 0; i < num_classes; ++i) {
-          printf("%d ", output_int8[i]);
+        //  printf("%d ", output_int8[i]);
           corrected_scores[i] = (int)output_int8[i] + output_bias[i];
       }
-      printf("\n");
+      //printf("\n");
       
       // Check if slope neuron appears dead (always near -128)
       // If so, use input variance as a heuristic for slope detection
       bool slope_neuron_dead = (output_int8[2] <= -125);
       
-      printf("Bias-corrected scores: ");
+      //printf("Bias-corrected scores: ");
       int max_corrected = corrected_scores[0];
       int second_max = -999;
       int second_idx = -1;
       for (int i = 0; i < num_classes; ++i) {
-          printf("%d ", corrected_scores[i]);
+          // printf("%d ", corrected_scores[i]);
           if (corrected_scores[i] > max_corrected) {
               second_max = max_corrected;
               second_idx = result;
@@ -227,10 +228,10 @@ int Model::predict()
       }
       printf("\n");
       
-      // Print confidence info
+      // Print confidence 
       int margin = max_corrected - second_max;
-      printf("Top: class %d (%d), Second: class %d (%d), Margin: %d\n", 
-             result, max_corrected, second_idx, second_max, margin);
+      //printf("Top: class %d (%d), Second: class %d (%d), Margin: %d\n", 
+      //       result, max_corrected, second_idx, second_max, margin);
       
       // If margin is very small, flag as uncertain
       if (margin < 20) {
@@ -239,9 +240,9 @@ int Model::predict()
   } else {
       // Float output
       float max_value = output->data.f[0];
-      printf("Output scores (float): ");
+      //printf("Output scores (float): ");
       for (int i = 0; i < num_classes; ++i) {
-          printf("%.4f ", output->data.f[i]);
+         // printf("%.4f ", output->data.f[i]);
           if (output->data.f[i] > max_value) {
               max_value = output->data.f[i];
               result = i;
