@@ -120,7 +120,7 @@ target_link_libraries(
 )
 
 # Reduce reserved heap/stack to resolve small RAM overflow.
-target_compile_definitions(main PRIVATE PICO_HEAP_SIZE=0x2000 PICO_STACK_SIZE=0x1800)
+target_compile_definitions(main PRIVATE PICO_HEAP_SIZE=0x800 PICO_STACK_SIZE=0x800)
 
 
 #pico_set_program_flash(program1 0x140000)
