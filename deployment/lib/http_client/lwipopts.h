@@ -22,7 +22,7 @@
 #endif
 #define MEM_ALIGNMENT               4
 #ifndef MEM_SIZE
-#define MEM_SIZE                    9000
+#define MEM_SIZE                    14000
 #endif
 #ifndef MEMP_NUM_SYS_TIMEOUT
 #define MEMP_NUM_SYS_TIMEOUT        8
@@ -33,18 +33,18 @@
 #ifndef SYS_LIGHTWEIGHT_PROT
 #define SYS_LIGHTWEIGHT_PROT        1
 #endif
-#define MEMP_NUM_TCP_SEG            10
+#define MEMP_NUM_TCP_SEG            12
 #define MEMP_NUM_ARP_QUEUE          2
-#define PBUF_POOL_SIZE              6
-#define PBUF_POOL_BUFSIZE           512
+#define PBUF_POOL_SIZE              8
+#define PBUF_POOL_BUFSIZE           1024
 #define LWIP_ARP                    1
 #define LWIP_ETHERNET               1
 #define LWIP_ICMP                   0
 #define LWIP_RAW                    0
 #define TCP_MSS                     536
 #define TCP_WND                     (2 * TCP_MSS)
-#define TCP_SND_BUF                 (1 * TCP_MSS)
-#define TCP_SND_QUEUELEN            8
+#define TCP_SND_BUF                 (2 * TCP_MSS)
+#define TCP_SND_QUEUELEN            12
 #define LWIP_DISABLE_TCP_SANITY_CHECKS 1
 #define LWIP_NETIF_STATUS_CALLBACK  0
 #define LWIP_NETIF_LINK_CALLBACK    0
