@@ -103,6 +103,9 @@ target_link_libraries(
   pico_cyw43_arch_lwip_poll
 )
 
+# Reduce reserved heap/stack to resolve small RAM overflow.
+target_compile_definitions(main PRIVATE PICO_HEAP_SIZE=0x400 PICO_STACK_SIZE=0x800)
+
 
 #pico_set_program_flash(program1 0x140000)
 #pico_set_program_flash(program2 0x180000)
