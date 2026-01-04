@@ -42,26 +42,34 @@ def ml_infer(features):
     crest = (peak / rms) if rms > 1e-6 else 0.0
     impulse = (peak / abs_mean) if abs_mean > 1e-6 else 0.0
 
+    mags = []
+    for i in range(0, n - 2, 3):
+        x, y, z = vals[i], vals[i + 1], vals[i + 2]
+        mags.append((x * x + y * y + z * z) ** 0.5)
+    mag_dev = [abs(m - 1.0) for m in mags]
+    rms_mag = (sum(d * d for d in mag_dev) / len(mag_dev)) ** 0.5 if mag_dev else 0.0
+    peak_mag = max(mag_dev, default=0.0)
+
     flags = []
     if n < 8:
         flags.append("short_window")
         quality = 0.3
         label = "unknown"
-    elif rms < 0.06:
+    elif rms_mag < 0.06:
         flags.append("quiet")
-        quality = 0.75
+        quality = 0.8
         label = "idle"
-    elif peak > 2.8 and crest > 6.0:
+    elif peak_mag > 0.9 or rms_mag > 0.45:
         flags.append("impact")
-        quality = 0.7
+        quality = 0.85
         label = "door_slam"
-    elif rms > 0.35 and 3.0 <= crest <= 5.0:
+    elif peak_mag > 0.5 or rms_mag > 0.28:
         flags.append("moving")
-        quality = 0.75
+        quality = 0.8
         label = "footsteps"
-    elif rms > 0.18 and crest > 5.0:
+    elif peak_mag > 0.25 or rms_mag > 0.15:
         flags.append("shift")
-        quality = 0.7
+        quality = 0.75
         label = "object_move"
     else:
         flags.append("light")
@@ -77,6 +85,8 @@ def ml_infer(features):
         "crest": round(crest, 2),
         "mean": round(mean, 3),
         "impulse": round(impulse, 2),
+        "rms_mag": round(rms_mag, 3),
+        "peak_mag": round(peak_mag, 3),
     }
 
 def llm_infer(trigger_class, trigger_conf, ml_out, meta):
