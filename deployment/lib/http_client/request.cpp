@@ -376,8 +376,8 @@ void HttpRequest::parse_response_data(const char *json, size_t len, ResponseData
 
     if (!json || !out) return;
     out->status_ok = false;
-    free(out->y);        // free old memory if reusing struct
-    out->y = NULL;
+    out->y = nullptr;
+    out->y_buf[0] = '\0';
 
     printf("Response JSON (%zu bytes): %.*s\n", len, (int)len, json);
     // Ensure NUL terminated for strstr/strtof. Our buffer is NUL-terminated by construction.
@@ -401,14 +401,13 @@ void HttpRequest::parse_response_data(const char *json, size_t len, ResponseData
     printf("Parsed string value length: %zu\n", value_len);
     if (value_len == 0) return;
 
-    // allocate memory for string + null terminator
-    char *buf = (char *)malloc(value_len + 1);
-    if (!buf) return;
-
-    memcpy(buf, start, value_len);
-    buf[value_len] = '\0';
-
-    out->y = buf;
+    size_t copy_len = value_len;
+    if (copy_len >= sizeof(out->y_buf)) {
+        copy_len = sizeof(out->y_buf) - 1;
+    }
+    memcpy(out->y_buf, start, copy_len);
+    out->y_buf[copy_len] = '\0';
+    out->y = out->y_buf;
     out->status_ok = true;
     return;
 }

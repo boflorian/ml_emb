@@ -79,7 +79,10 @@ static bool wifi_ready = false;
 
 // Preprocessing functions
 void lowpass_filter(float* x, int length, int window) {
-    float* temp = new float[length];
+    static float temp[INFERENCE_WINDOW];
+    if (length > INFERENCE_WINDOW) {
+        return;
+    }
     for(int i = 0; i < length; i++) {
         float sum = 0.0f;
         int count = 0;
@@ -92,12 +95,14 @@ void lowpass_filter(float* x, int length, int window) {
         temp[i] = sum / count;
     }
     memcpy(x, temp, length * sizeof(float));
-    delete[] temp;
 }
 
 void apply_lowpass_filter(float* buffer, int window_size, int window, int features) {
+    if (window_size > INFERENCE_WINDOW) {
+        return;
+    }
     for(int axis = 0; axis < features; axis++) {
-        float* axis_data = new float[window_size];
+        static float axis_data[INFERENCE_WINDOW];
         for(int t = 0; t < window_size; t++) {
             axis_data[t] = buffer[t * features + axis];
         }
@@ -105,7 +110,6 @@ void apply_lowpass_filter(float* buffer, int window_size, int window, int featur
         for(int t = 0; t < window_size; t++) {
             buffer[t * features + axis] = axis_data[t];
         }
-        delete[] axis_data;
     }
 }
 
@@ -565,7 +569,6 @@ int main(void)
                     ResponseDataStr response = request.post();
                     if (response.status_ok && response.y) {
                         printf("[APP2] response message: %s\n", response.y);
-                        free(response.y);
                         net_state = NET_DONE;
                     } else {
                         printf("[APP2] request failed\n");

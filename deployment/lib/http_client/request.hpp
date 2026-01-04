@@ -33,6 +33,7 @@ typedef struct ResponseCtx {
 
 typedef struct ResponseDataStr {
     char *y;
+    char y_buf[192];
     bool status_ok;
 } ResponseDataStr;
 
