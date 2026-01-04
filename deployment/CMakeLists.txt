@@ -48,8 +48,13 @@ add_compile_definitions(PICO_LWIP_CONFIG_FILE="lib/http_client/lwipopts.h")
 
 
 add_executable(main main.cpp models/model_data.cc) # main function to run.
+add_executable(arena_size_test arena_size_test.cpp models/model_data.cc)
 
 target_include_directories(main
+  PRIVATE
+  ${CMAKE_CURRENT_LIST_DIR}/.
+)
+target_include_directories(arena_size_test
   PRIVATE
   ${CMAKE_CURRENT_LIST_DIR}/.
 )
@@ -103,6 +108,14 @@ target_link_libraries(
   pico_cyw43_arch_lwip_poll
 )
 
+target_link_libraries(
+  arena_size_test
+  src
+  models
+  pico_stdlib
+  pico-tflmicro
+)
+
 # Reduce reserved heap/stack to resolve small RAM overflow.
 target_compile_definitions(main PRIVATE PICO_HEAP_SIZE=0x200 PICO_STACK_SIZE=0x700)
 
@@ -113,6 +126,9 @@ target_compile_definitions(main PRIVATE PICO_HEAP_SIZE=0x200 PICO_STACK_SIZE=0x7
 # enable usb and uart output
 pico_enable_stdio_usb(main 1)
 pico_enable_stdio_uart(main 1)
+pico_enable_stdio_usb(arena_size_test 1)
+pico_enable_stdio_uart(arena_size_test 1)
 
 # create map/bin/hex/uf2 file etc.
 pico_add_extra_outputs(main)
+pico_add_extra_outputs(arena_size_test)
