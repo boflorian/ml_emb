@@ -643,7 +643,17 @@ static err_t post_connected_stream(void *arg, struct altcp_pcb *pcb, err_t err) 
 
 err_t HttpRequest::set_request_header(size_t total_size, const char* content_type) {
     ip_addr_t tmp;
-    err_t er = dns_gethostbyname(st_.host, &tmp, dns_found_cb, &st_);
+    bool is_ip = ipaddr_aton(st_.host, &tmp);
+    err_t er = ERR_OK;
+    if (is_ip) {
+        st_.addr = tmp;
+        st_.resolved = true;
+    }
+#if LWIP_DNS
+    if (!is_ip) {
+        er = dns_gethostbyname(st_.host, &tmp, dns_found_cb, &st_);
+    }
+#endif
     if (er == ERR_OK) {
         st_.addr = tmp;
         st_.resolved = true;
