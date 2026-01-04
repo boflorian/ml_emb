@@ -43,6 +43,9 @@ set(PICO_CYW43_ARCH lwip_poll CACHE STRING "" FORCE)
 pico_sdk_init()
 message("PICO_SDK_PATH: ${PICO_SDK_PATH}")
 
+# Ensure lwIP uses our local config for all targets.
+add_compile_definitions(PICO_LWIP_CONFIG_FILE="lib/http_client/lwipopts.h")
+
 
 add_executable(main main.cpp models/model_data.cc) # main function to run.
 
@@ -98,7 +101,6 @@ target_link_libraries(
   hardware_adc
   pico-tflmicro
   pico_cyw43_arch_lwip_poll
-  pico_lwip_http
 )
 
 #pico_set_program_flash(program1 0x140000)
