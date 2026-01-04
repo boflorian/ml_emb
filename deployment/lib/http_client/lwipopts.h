@@ -22,10 +22,10 @@
 #endif
 #define MEM_ALIGNMENT               4
 #ifndef MEM_SIZE
-#define MEM_SIZE                    12000
+#define MEM_SIZE                    10000
 #endif
 #ifndef MEMP_NUM_SYS_TIMEOUT
-#define MEMP_NUM_SYS_TIMEOUT        8
+#define MEMP_NUM_SYS_TIMEOUT        4
 #endif
 #ifndef LWIP_TIMERS
 #define LWIP_TIMERS                 1
@@ -33,9 +33,9 @@
 #ifndef SYS_LIGHTWEIGHT_PROT
 #define SYS_LIGHTWEIGHT_PROT        1
 #endif
-#define MEMP_NUM_TCP_SEG            8
+#define MEMP_NUM_TCP_SEG            6
 #define MEMP_NUM_ARP_QUEUE          2
-#define PBUF_POOL_SIZE              8
+#define PBUF_POOL_SIZE              6
 #define PBUF_POOL_BUFSIZE           512
 #define LWIP_ARP                    1
 #define LWIP_ETHERNET               1
@@ -45,9 +45,9 @@
 #define TCP_WND                     (2 * TCP_MSS)
 #define TCP_SND_BUF                 (2 * TCP_MSS)
 #define TCP_SND_QUEUELEN            ((4 * (TCP_SND_BUF) + (TCP_MSS - 1)) / (TCP_MSS))
-#define LWIP_NETIF_STATUS_CALLBACK  1
-#define LWIP_NETIF_LINK_CALLBACK    1
-#define LWIP_NETIF_HOSTNAME         1
+#define LWIP_NETIF_STATUS_CALLBACK  0
+#define LWIP_NETIF_LINK_CALLBACK    0
+#define LWIP_NETIF_HOSTNAME         0
 #define LWIP_NETCONN                0
 #define MEM_STATS                   0
 #define SYS_STATS                   0
@@ -59,7 +59,7 @@
 #define LWIP_IPV4                   1
 #define LWIP_TCP                    1
 #define LWIP_UDP                    1
-#define LWIP_DNS                    1
+#define LWIP_DNS                    0
 #define LWIP_SNTP                   0
 #define SNTP_SERVER_DNS             0
 #define LWIP_TCP_KEEPALIVE          1

@@ -431,14 +431,24 @@ void HttpRequest::set_dummy_imu_data() { set_dummy_mnist_data(); }
 ResponseDataStr HttpRequest::get() {
     // Implement GET request logic
     ip_addr_t tmp;
-    err_t er = dns_gethostbyname(st_.host, &tmp, dns_found_cb, &st_);
+    bool is_ip = ipaddr_aton(st_.host, &tmp);
+    err_t er = ERR_OK;
+    if (is_ip) {
+        st_.addr = tmp;
+        st_.resolved = true;
+    }
+#if LWIP_DNS
+    if (!is_ip) {
+        er = dns_gethostbyname(st_.host, &tmp, dns_found_cb, &st_);
+    }
+#endif
     uint32_t start_ms = now_ms();
 
     ResponseDataStr data{};
     data.status_ok = false;
     data.y = NULL;
 
-    if (er == ERR_OK) {
+    if (er == ERR_OK && !is_ip) {
         st_.addr = tmp;
         st_.resolved = true;
     }
@@ -505,7 +515,17 @@ ResponseDataStr HttpRequest::post() {
 
     ip_addr_t tmp;
     // Pass `&st_` (PostState*), NOT `&state` (PostState**)
-    err_t er = dns_gethostbyname(st_.host, &tmp, dns_found_cb, &st_);
+    bool is_ip = ipaddr_aton(st_.host, &tmp);
+    err_t er = ERR_OK;
+    if (is_ip) {
+        st_.addr = tmp;
+        st_.resolved = true;
+    }
+#if LWIP_DNS
+    if (!is_ip) {
+        er = dns_gethostbyname(st_.host, &tmp, dns_found_cb, &st_);
+    }
+#endif
     uint32_t start_ms = now_ms();
 
     ResponseDataStr data{};
@@ -513,7 +533,7 @@ ResponseDataStr HttpRequest::post() {
     data.y = NULL;
     // data.y = 0.0f;
 
-    if (er == ERR_OK) {
+    if (er == ERR_OK && !is_ip) {
         st_.addr = tmp;
         st_.resolved = true;
     }
