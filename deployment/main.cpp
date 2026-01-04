@@ -387,8 +387,8 @@ int main(void)
                     active_start = 0; // all quiet, fall back to start
                 }
 
-                printf("[DBG] Max magnitude idx=%d val=%.2f | active_start=%d (thr=%.2fg)\n",
-                       max_magnitude_index, max_magnitude, active_start, MOTION_THRESHOLD_G);
+                //] Max magnitude idx=%d val=%.2f | active_start=%d (thr=%.2fg)\n",
+                  //     max_magnitude_index, max_magnitude, active_start, MOTION_THRESHOLD_G);
                 
                 // Extract INFERENCE_WINDOW samples prioritizing active region
                 const int half_window = INFERENCE_WINDOW / 2;
@@ -401,7 +401,7 @@ int main(void)
                     start_sample = end_sample - INFERENCE_WINDOW + 1;
                     if(start_sample < 0) start_sample = 0;
                 }
-                printf("[DBG] Window start=%d end=%d (size=%d)\n", start_sample, end_sample, INFERENCE_WINDOW);
+                //printf("[DBG] Window start=%d end=%d (size=%d)\n", start_sample, end_sample, INFERENCE_WINDOW);
                 
                 const int inference_elements = INFERENCE_WINDOW * IMU_FEATURES;
                 float inference_buffer_float[inference_elements];
@@ -445,10 +445,10 @@ int main(void)
                 // If not, we need to re-quantize the model properly
 
                 // Debug: print some preprocessed values (now Z-score normalized, ~[-3, 3])
-                printf("[DBG] Window floats: ");
-                for(int i = 0; i < 10 && i < inference_elements; i++) {
-                    printf("%.2f ", inference_buffer_float[i]);
-                }
+                //printf("[DBG] Window floats: ");
+                //for(int i = 0; i < 10 && i < inference_elements; i++) {
+                //    printf("%.2f ", inference_buffer_float[i]);
+                //}
                 printf("\n");
                 
                 // Quantize to int8 (signed) - model uses INT8 quantization with zero_point around -1
@@ -459,11 +459,11 @@ int main(void)
                     inference_buffer[i] = (int8_t)std::max(-128, std::min(127, quantized));
                 }
 
-                printf("[DBG] Window quantized: ");
-                for(int i = 0; i < 10 && i < inference_elements; i++) {
-                    printf("%d ", inference_buffer[i]);
-                }
-                printf("\n");
+                //printf("[DBG] Window quantized: ");
+                //for(int i = 0; i < 10 && i < inference_elements; i++) {
+                //    printf("%d ", inference_buffer[i]);
+                //}
+                //printf("\n");
                 
                 // Copy to model input (cast to uint8_t* for memcpy, but data is int8)
                 const int bytes_to_copy = byte_size < inference_elements ? byte_size : inference_elements;

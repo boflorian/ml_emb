@@ -50,11 +50,11 @@ int Model::setup()
     // Use model_data_len directly instead of sizeof
     extern const unsigned int model_data_len;
 
-    printf("Model::setup start\n");
-    printf("Model blob length: %u\n", model_data_len);
-    printf("Model blob first 16 bytes: ");
-    for (int i = 0; i < 16; ++i) printf("%02X ", model_data[i]);
-    printf("\n");
+    //printf("Model::setup start\n");
+    //printf("Model blob length: %u\n", model_data_len);
+    //printf("Model blob first 16 bytes: ");
+    //for (int i = 0; i < 16; ++i) printf("%02X ", model_data[i]);
+    //printf("\n");
     model = tflite::GetModel(model_data);
     if (model->version() != TFLITE_SCHEMA_VERSION) {
         TF_LITE_REPORT_ERROR(error_reporter,
@@ -185,10 +185,10 @@ int Model::predict()
   // Classes: 0=negative, 1=ring, 2=slope, 3=wave
   // Tune these values based on observed bias
   static const int output_bias[4] = {
-      80,    // boost negative
-      30,    // boost ring slightly
-      150,   // LARGE boost for slope (dead neuron workaround)
-      -80    // penalize wave (model is biased towards it)
+      50,    // boost negative
+      50,    // boost ring slightly
+      50,   // LARGE boost for slope (dead neuron workaround)
+      -100    // penalize wave (model is biased towards it)
   };
   
   // Check if output is quantized (int8) or float
@@ -231,10 +231,6 @@ int Model::predict()
       int margin = max_corrected - second_max;
       printf("Top: class %d (%d), Second: class %d (%d), Margin: %d\n", 
              result, max_corrected, second_idx, second_max, margin);
-      
-      if (slope_neuron_dead) {
-          printf("NOTE: Slope neuron appears dead (output=%d)\n", output_int8[2]);
-      }
       
       // If margin is very small, flag as uncertain
       if (margin < 20) {
