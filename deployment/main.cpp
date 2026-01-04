@@ -303,8 +303,7 @@ int main(void)
     int buffer_index = 0;
     int loop_counter = 0;
     bool heartbeat_on = false;
-    uint16_t backlight_level = 1000;
-
+    uint16_t backlight_level = 1000
 #ifdef PICO_DEFAULT_LED_PIN
     gpio_init(PICO_DEFAULT_LED_PIN);
     gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
