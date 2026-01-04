@@ -39,7 +39,7 @@ using namespace std;
 
 // App2 configuration
 #include "wifi_config.h"
-static const char SERVER_HOST[] = "192.168.1.10";
+static const char SERVER_HOST[] = "192.168.178.101";
 static const uint16_t SERVER_PORT = 8000;
 static const char SERVER_PATH[] = "/api/gesture_event";
 
@@ -312,7 +312,8 @@ int main(void)
 #endif
 
     // Hardcoding the model size instead of including the header
-    constexpr size_t arena_size = 287512 + 1024; // Model size + buffer for interpreter
+    constexpr size_t arena_size = 81920; // Tensor size is 67876 -> safety margin 80 * 1024
+
 
     while (true) {
         // printf("Entering main loop iteration, state: %d\n", current_state);
@@ -565,6 +566,7 @@ int main(void)
                     ResponseDataStr response = request.post();
                     if (response.status_ok && response.y) {
                         printf("[APP2] response message: %s\n", response.y);
+                        free(response.y);
                         net_state = NET_DONE;
                     } else {
                         printf("[APP2] request failed\n");
