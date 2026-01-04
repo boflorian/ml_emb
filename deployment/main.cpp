@@ -475,7 +475,7 @@ int main(void)
 
                 // Run inference
                 int result = ml_model.predict();
-                printf("Inference result: %d\n", result);
+                // printf("Inference result: %d\n", result);
                 
                 // If classified as negative, take the next most likely gesture
                 //if (result == 0) {
@@ -499,7 +499,7 @@ int main(void)
                     GUI_DisString_EN(10, 80, "Inference failed", &Font16, WHITE, BLACK);
                 } else {
                     const char* label = (result >= 0 && result < kCategoryCount) ? kCategoryLabels[result] : "unknown";
-                    printf("Predicted Gesture: %d (%s)\n", result, label);
+                    // printf("Predicted Gesture: %d (%s)\n", result, label);
                     printf("[APP1] class=%d conf=%.2f\n", result, 0.0f);
                     // Display gesture on LCD
                     char str[32];
