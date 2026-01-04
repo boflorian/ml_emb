@@ -110,5 +110,9 @@ target_link_libraries(
 pico_enable_stdio_usb(main 1)
 pico_enable_stdio_uart(main 1)
 
+# Trim heap/stack reservations to fit RAM budget.
+pico_set_stack_size(main 0x1000)
+pico_set_heap_size(main 0x1800)
+
 # create map/bin/hex/uf2 file etc.
 pico_add_extra_outputs(main)
