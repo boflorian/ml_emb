@@ -453,6 +453,7 @@ ResponseDataStr HttpRequest::get() {
     }
 
     while (!st_.resolved) {
+        cyw43_arch_poll();
         async_context_poll(this->ctx);
         async_context_wait_for_work_ms(this->ctx, 50);
         if ((now_ms() - start_ms) > timeout_ms_) {
@@ -475,6 +476,7 @@ ResponseDataStr HttpRequest::get() {
 
     start_ms = now_ms();
     while (!st_.complete) {
+        cyw43_arch_poll();
         async_context_poll(this->ctx);
         async_context_wait_for_work_ms(this->ctx, 100);
         if ((now_ms() - start_ms) > timeout_ms_) {
@@ -538,6 +540,7 @@ ResponseDataStr HttpRequest::post() {
     }
 
     while (!st_.resolved) {
+        cyw43_arch_poll();
         async_context_poll(this->ctx);
         async_context_wait_for_work_ms(this->ctx, 50);
         if ((now_ms() - start_ms) > timeout_ms_) {
@@ -561,6 +564,7 @@ ResponseDataStr HttpRequest::post() {
 
     start_ms = now_ms();
     while (!st_.complete) {
+        cyw43_arch_poll();
         async_context_poll(this->ctx);
         async_context_wait_for_work_ms(this->ctx, 100);
         if ((now_ms() - start_ms) > timeout_ms_) {
@@ -658,6 +662,7 @@ err_t HttpRequest::set_request_header(size_t total_size, const char* content_typ
         st_.resolved = true;
     }
     while (!st_.resolved) {
+        cyw43_arch_poll();
         async_context_poll(this->ctx);
         async_context_wait_for_work_ms(this->ctx, 50);
     }
