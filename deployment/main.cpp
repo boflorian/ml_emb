@@ -49,8 +49,6 @@ static const uint32_t COOLDOWN_MS = 0;
 static const uint32_t NET_TIMEOUT_MS = 3000;
 static const uint32_t SERVER_SEND_INTERVAL_MS = 800;
 static const int SERVER_WINDOW_SAMPLES = 32;
-static const uint32_t SERVER_SEND_INTERVAL_MS = 800;
-static const int SERVER_WINDOW_SAMPLES = 64;
 
 
 
@@ -81,7 +79,6 @@ static const char* last_trigger_label = "unknown";
 static bool wifi_ready = false;
 static bool armed = false;
 static bool send_arm_event = false;
-static bool armed = false;
 
 // Preprocessing functions
 void lowpass_filter(float* x, int length, int window) {
