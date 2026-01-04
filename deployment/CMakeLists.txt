@@ -103,16 +103,15 @@ target_link_libraries(
   pico_cyw43_arch_lwip_poll
 )
 
+# Trim heap/stack reservations to fit RAM budget.
+target_compile_definitions(main PRIVATE PICO_STACK_SIZE=0x1000 PICO_HEAP_SIZE=0x2000)
+
 #pico_set_program_flash(program1 0x140000)
 #pico_set_program_flash(program2 0x180000)
 
 # enable usb and uart output
 pico_enable_stdio_usb(main 1)
 pico_enable_stdio_uart(main 1)
-
-# Trim heap/stack reservations to fit RAM budget.
-pico_set_stack_size(main 0x1000)
-pico_set_heap_size(main 0x1800)
 
 # create map/bin/hex/uf2 file etc.
 pico_add_extra_outputs(main)
