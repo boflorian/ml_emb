@@ -186,9 +186,9 @@ int Model::predict()
   // Tune these values based on observed bias
   static const int output_bias[4] = {
       50,    // boost negative
-      50,    // boost ring slightly
-      50,   // LARGE boost for slope (dead neuron workaround)
-      -100    // penalize wave (model is biased towards it)
+      100,    // boost ring slightly
+      80,   // LARGE boost for slope (dead neuron workaround)
+      -150    // penalize wave (model is biased towards it)
   };
   
   // Check if output is quantized (int8) or float
