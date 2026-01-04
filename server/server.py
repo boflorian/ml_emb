@@ -7,7 +7,9 @@ import urllib.error
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+ARMED = False
 LAST_EVENT = {
     "ts": 0,
     "label": "idle",
@@ -134,205 +136,15 @@ def healthcheck():
 
 @app.get("/api/activity_status")
 def activity_status():
-    return jsonify(LAST_EVENT)
+    payload = dict(LAST_EVENT)
+    payload["armed"] = ARMED
+    return jsonify(payload)
 
 @app.get("/dashboard")
 def dashboard():
-    html = """
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Room Activity Monitor</title>
-  <style>
-    :root {
-      --bg1: #0b1320;
-      --bg2: #12243a;
-      --accent: #f4c430;
-      --alert: #f05454;
-      --warn: #f2a340;
-      --ok: #4dd599;
-      --text: #e9eef7;
-      --muted: #a9b4c7;
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      font-family: "Alegreya Sans", "Segoe UI", Arial, sans-serif;
-      color: var(--text);
-      background: radial-gradient(circle at 20% 10%, #1c2f4a, var(--bg1));
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 24px;
-    }
-    .panel {
-      width: min(900px, 96vw);
-      background: linear-gradient(160deg, rgba(255,255,255,0.06), rgba(0,0,0,0.2));
-      border: 1px solid rgba(255,255,255,0.08);
-      border-radius: 18px;
-      padding: 28px;
-      box-shadow: 0 18px 40px rgba(0,0,0,0.45);
-    }
-    .header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 16px;
-      margin-bottom: 20px;
-    }
-    .title {
-      font-size: 28px;
-      letter-spacing: 0.6px;
-    }
-    .badge {
-      padding: 6px 12px;
-      border-radius: 999px;
-      background: rgba(255,255,255,0.08);
-      color: var(--muted);
-      font-size: 13px;
-    }
-    .status {
-      display: grid;
-      grid-template-columns: 2fr 1fr;
-      gap: 18px;
-    }
-    .card {
-      background: rgba(12, 18, 28, 0.7);
-      border: 1px solid rgba(255,255,255,0.08);
-      border-radius: 16px;
-      padding: 20px;
-      min-height: 140px;
-    }
-    .label {
-      font-size: 14px;
-      color: var(--muted);
-      text-transform: uppercase;
-      letter-spacing: 1.2px;
-    }
-    .value {
-      font-size: 30px;
-      margin-top: 10px;
-      font-weight: 600;
-    }
-    .message {
-      font-size: 18px;
-      margin-top: 12px;
-      color: var(--text);
-      line-height: 1.4;
-    }
-    .alert {
-      color: var(--alert);
-    }
-    .warn {
-      color: var(--warn);
-    }
-    .ok {
-      color: var(--ok);
-    }
-    .pulse {
-      position: relative;
-      width: 18px;
-      height: 18px;
-      border-radius: 50%;
-      background: var(--ok);
-      box-shadow: 0 0 0 0 rgba(77, 213, 153, 0.7);
-      animation: pulse 2s infinite;
-    }
-    .pulse.alert {
-      background: var(--alert);
-      box-shadow: 0 0 0 0 rgba(240, 84, 84, 0.7);
-    }
-    .pulse.warn {
-      background: var(--warn);
-      box-shadow: 0 0 0 0 rgba(242, 163, 64, 0.7);
-    }
-    @keyframes pulse {
-      0% { box-shadow: 0 0 0 0 rgba(77, 213, 153, 0.7); }
-      70% { box-shadow: 0 0 0 18px rgba(77, 213, 153, 0); }
-      100% { box-shadow: 0 0 0 0 rgba(77, 213, 153, 0); }
-    }
-    @media (max-width: 720px) {
-      .status { grid-template-columns: 1fr; }
-      .value { font-size: 26px; }
-    }
-  </style>
-  <link href="https://fonts.googleapis.com/css2?family=Alegreya+Sans:wght@400;600&display=swap" rel="stylesheet">
-</head>
-<body>
-  <div class="panel">
-    <div class="header">
-      <div class="title">Room Activity Monitor</div>
-      <div class="badge">Pico IMU + Server Analysis</div>
-    </div>
-    <div class="status">
-      <div class="card">
-        <div class="label">Latest Activity</div>
-        <div class="value" id="label">Waiting...</div>
-        <div class="message" id="message">No data yet.</div>
-      </div>
-      <div class="card">
-        <div class="label">Status</div>
-        <div class="value">
-          <span id="statusText" class="ok">Secure</span>
-        </div>
-        <div class="message">
-          <span class="pulse" id="pulse"></span>
-          <span id="timestamp">--</span>
-        </div>
-      </div>
-    </div>
-  </div>
-  <script>
-    const labelEl = document.getElementById("label");
-    const messageEl = document.getElementById("message");
-    const statusText = document.getElementById("statusText");
-    const pulse = document.getElementById("pulse");
-    const tsEl = document.getElementById("timestamp");
-
-    const alertLabels = new Set(["door_slam", "object_move"]);
-    const warnLabels = new Set(["footsteps", "light_activity"]);
-
-    function render(data) {
-      labelEl.textContent = data.label || "unknown";
-      messageEl.textContent = data.message || "No message.";
-      const ts = data.ts ? new Date(data.ts * 1000) : null;
-      tsEl.textContent = ts ? ts.toLocaleTimeString() : "--";
-
-      if (alertLabels.has(data.label)) {
-        statusText.textContent = "Alert";
-        statusText.className = "alert";
-        pulse.className = "pulse alert";
-      } else if (warnLabels.has(data.label)) {
-        statusText.textContent = "Watch";
-        statusText.className = "warn";
-        pulse.className = "pulse warn";
-      } else {
-        statusText.textContent = "Secure";
-        statusText.className = "ok";
-        pulse.className = "pulse";
-      }
-    }
-
-    async function poll() {
-      try {
-        const resp = await fetch("/api/activity_status");
-        const data = await resp.json();
-        render(data);
-      } catch (err) {
-        messageEl.textContent = "Unable to reach server.";
-      }
-    }
-
-    poll();
-    setInterval(poll, 2000);
-  </script>
-</body>
-</html>
-"""
-    return html
+    path = os.path.join(BASE_DIR, "dashboard.html")
+    with open(path, "r", encoding="utf-8") as handle:
+        return handle.read()
 
 @app.post("/api/v1/greet")
 def greet():
@@ -346,21 +158,29 @@ def predict_a():
 
 @app.post("/api/gesture_event")
 def gesture_event():
+    global ARMED
     payload = request.get_json(silent=True) or {}
     trigger_class = payload.get("trigger_class", "unknown")
     trigger_conf = float(payload.get("trigger_conf", 0.0) or 0.0)
     features = payload.get("features", [])
+    if not features:
+        features = payload.get("samples", [])
     meta = payload.get("meta", {})
+
+    if trigger_class == "ring":
+        ARMED = True
+    elif trigger_class == "disarm" or meta.get("armed") is False:
+        ARMED = False
 
     ml_out = ml_infer(features)
     message = llm_infer(trigger_class, trigger_conf, ml_out, meta)
 
     command = None
-    if ml_out.get("label") == "door_slam":
+    if ARMED and ml_out.get("label") == "door_slam":
         command = {"type": "display", "text": "Possible entry"}
-    elif ml_out.get("label") == "object_move":
+    elif ARMED and ml_out.get("label") == "object_move":
         command = {"type": "display", "text": "Check room"}
-    elif ml_out.get("label") == "footsteps":
+    elif ARMED and ml_out.get("label") == "footsteps":
         command = {"type": "display", "text": "Movement"}
 
     LAST_EVENT.update(

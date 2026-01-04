@@ -47,7 +47,10 @@ static const char SERVER_PATH[] = "/api/gesture_event";
 static const int TRIGGER_CLASS = 1;
 static const uint32_t COOLDOWN_MS = 0;
 static const uint32_t NET_TIMEOUT_MS = 3000;
-static const uint32_t MODE_SERVER_BUDGET_MS = 8000;
+static const uint32_t SERVER_SEND_INTERVAL_MS = 800;
+static const int SERVER_WINDOW_SAMPLES = 32;
+static const uint32_t SERVER_SEND_INTERVAL_MS = 800;
+static const int SERVER_WINDOW_SAMPLES = 64;
 
 
 
@@ -76,6 +79,9 @@ static int last_trigger_class = -1;
 static const char* last_trigger_label = "unknown";
 
 static bool wifi_ready = false;
+static bool armed = false;
+static bool send_arm_event = false;
+static bool armed = false;
 
 // Preprocessing functions
 void lowpass_filter(float* x, int length, int window) {
@@ -193,6 +199,7 @@ static bool ensure_wifi_connected(void) {
 }
 
 
+
 int count_digits(int number) {
     if (number == 0) {
         return 1; // Special case for 0, which has 1 digit
@@ -261,6 +268,11 @@ int main(void)
     lcd_ready = true;
 
     // Keep the white background from init_gui()
+
+    // Pre-connect Wi-Fi so App2 can send immediately.
+    if (!ensure_wifi_connected()) {
+        printf("[APP2] Wi-Fi pre-connect failed (will retry on trigger)\n");
+    }
 
 
     // run core1 loop that handles user interface
@@ -506,6 +518,8 @@ int main(void)
                         last_trigger_class = result;
                         last_trigger_label = label;
                         printf("[TRIGGER] fired\n");
+                        armed = true;
+                        send_arm_event = true;
                         mode = MODE_SERVER;
                         net_state = NET_IDLE;
                     }
@@ -525,68 +539,99 @@ int main(void)
                 break;
         }
         } else {
-            static uint32_t net_start_ms = 0;
-            if (net_state == NET_IDLE) {
-                net_start_ms = now_ms();
-                printf("[APP2] connecting to server ...\n");
-                net_state = NET_WIFI;
-            }
+            static float stream_buffer[SERVER_WINDOW_SAMPLES * IMU_FEATURES];
+            static int stream_index = 0;
+            static uint32_t last_send_ms = 0;
 
-            if ((now_ms() - net_start_ms) > MODE_SERVER_BUDGET_MS) {
-                printf("[APP2] timeout/error -> back to APP1\n");
-                net_state = NET_ERR;
-            }
-
-            switch (net_state) {
-                case NET_WIFI:
-                    if (ensure_wifi_connected()) {
-                        net_state = NET_SEND;
-                    } else {
-                        net_state = NET_ERR;
-                    }
-                    break;
-                case NET_SEND: {
-                    char json[256];
-                    uint32_t t_ms = now_ms();
-                    int n = snprintf(
-                        json, sizeof(json),
-                        "{\"device_id\":\"pico_w\",\"t_ms\":%lu,\"trigger_class\":\"%s\",\"trigger_id\":%d}",
-                        (unsigned long)t_ms, last_trigger_label, last_trigger_class);
-                    if (n <= 0 || n >= (int)sizeof(json)) {
-                        printf("[APP2] payload build failed\n");
-                        net_state = NET_ERR;
-                        break;
-                    }
-                    HttpRequest request(std::string(SERVER_PATH),
-                                        std::string(SERVER_HOST),
-                                        SERVER_PORT);
-                    request.set_timeout_ms(NET_TIMEOUT_MS);
-                    request.set_body_raw(json, strlen(json));
-                    ResponseDataStr response = request.post();
-                    if (response.status_ok && response.y) {
-                        printf("[APP2] response message: %s\n", response.y);
-                        free(response.y);
-                        net_state = NET_DONE;
-                    } else {
-                        printf("[APP2] request failed\n");
-                        net_state = NET_ERR;
-                    }
-                    break;
+            if (!armed) {
+                mode = MODE_GESTURE;
+                current_state = STARTING;
+                net_state = NET_IDLE;
+            } else {
+                if (net_state == NET_IDLE) {
+                    printf("[APP2] streaming to server ...\n");
+                    net_state = NET_WIFI;
                 }
-                case NET_DONE:
-                    printf("[APP2] done -> back to APP1\n");
-                    mode = MODE_GESTURE;
-                    current_state = STARTING;
-                    net_state = NET_IDLE;
-                    break;
-                case NET_ERR:
+
+                if (net_state == NET_WIFI) {
+                    if (!ensure_wifi_connected()) {
+                        printf("[APP2] Wi-Fi not ready\n");
+                        net_state = NET_ERR;
+                    } else {
+                        net_state = NET_SEND;
+                    }
+                }
+
+                if (net_state == NET_SEND) {
+                    IMU_ST_SENSOR_DATA gyro, accel;
+                    imuDataAccGyrGet(&gyro, &accel);
+                    const int write_offset = stream_index * IMU_FEATURES;
+                    stream_buffer[write_offset + 0] = (float)accel.s16X * ACCEL_SCALE;
+                    stream_buffer[write_offset + 1] = (float)accel.s16Y * ACCEL_SCALE;
+                    stream_buffer[write_offset + 2] = (float)accel.s16Z * ACCEL_SCALE;
+                    stream_index++;
+
+                    uint32_t now = now_ms();
+                    if (stream_index >= SERVER_WINDOW_SAMPLES &&
+                        (now - last_send_ms) >= SERVER_SEND_INTERVAL_MS) {
+                        static char json[2048];
+                        const char* trig = send_arm_event ? "ring" : "activity";
+                        int n = snprintf(
+                            json, sizeof(json),
+                            "{\"device_id\":\"pico_w\",\"t_ms\":%lu,"
+                            "\"trigger_class\":\"%s\",\"trigger_conf\":1.0,"
+                            "\"samples\":[",
+                            (unsigned long)now, trig);
+                        if (n <= 0 || n >= (int)sizeof(json)) {
+                            printf("[APP2] payload build failed\n");
+                            net_state = NET_ERR;
+                        } else {
+                            int pos = n;
+                            for (int i = 0; i < SERVER_WINDOW_SAMPLES * IMU_FEATURES; i++) {
+                                int written = snprintf(
+                                    json + pos, sizeof(json) - pos,
+                                    "%s%.4f",
+                                    (i == 0 ? "" : ","),
+                                    stream_buffer[i]);
+                                if (written <= 0 || written >= (int)(sizeof(json) - pos)) {
+                                    break;
+                                }
+                                pos += written;
+                            }
+                            int tail = snprintf(
+                                json + pos, sizeof(json) - pos,
+                                "],\"meta\":{\"fs\":100,\"win\":%d,\"armed\":true}}",
+                                SERVER_WINDOW_SAMPLES);
+                            if (tail <= 0 || tail >= (int)(sizeof(json) - pos)) {
+                                printf("[APP2] payload build failed\n");
+                                net_state = NET_ERR;
+                            } else {
+                                HttpRequest request(std::string(SERVER_PATH),
+                                                    std::string(SERVER_HOST),
+                                                    SERVER_PORT);
+                                request.set_timeout_ms(NET_TIMEOUT_MS);
+                                request.set_body_raw(json, strlen(json));
+                                ResponseDataStr response = request.post();
+                                if (response.status_ok && response.y) {
+                                    printf("[APP2] response message: %s\n", response.y);
+                                } else {
+                                    printf("[APP2] request failed\n");
+                                }
+                                send_arm_event = false;
+                                stream_index = 0;
+                                last_send_ms = now;
+                            }
+                        }
+                    }
+                }
+
+                if (net_state == NET_ERR) {
                     printf("[APP2] timeout/error -> back to APP1\n");
+                    armed = false;
                     mode = MODE_GESTURE;
                     current_state = STARTING;
                     net_state = NET_IDLE;
-                    break;
-                default:
-                    break;
+                }
             }
         }
 
