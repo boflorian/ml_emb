@@ -111,8 +111,11 @@ target_link_libraries(
 target_link_libraries(
   arena_size_test
   src
+  config
   models
   pico_stdlib
+  hardware_spi
+  pico_multicore
   pico-tflmicro
 )
 
