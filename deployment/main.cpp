@@ -38,8 +38,7 @@ using namespace std;
 #define ACCEL_SCALE (1.0f / 16384.0f)
 
 // App2 configuration
-static const char WIFI_SSID[] = "your_wifi_ssid";
-static const char WIFI_PASSWORD[] = "your_wifi_password";
+#include "wifi_config.h"
 static const char SERVER_HOST[] = "192.168.1.10";
 static const uint16_t SERVER_PORT = 8000;
 static const char SERVER_PATH[] = "/api/gesture_event";
