@@ -2,12 +2,14 @@
 #include<iostream>
 #include <cstdlib> 
 #include <iostream>
+#include <string>
 #include <cstring>
 #include <stdio.h>
 
 #include "pico/stdlib.h"
 #include "pico/multicore.h"
 #include "pico/sync.h"
+#include "pico/cyw43_arch.h"
 #include "hardware/watchdog.h"
 #include "hardware/sync.h"
 
@@ -18,6 +20,7 @@
 
 #include "model.h"
 #include "model_settings.h"
+#include "request.hpp"
 
 // For IMU
 #include "icm20948.h"
@@ -34,6 +37,19 @@ using namespace std;
 #define IMU_FEATURES 3          // ax, ay, az (match lab_0_1 data flow)
 #define ACCEL_SCALE (1.0f / 16384.0f)
 
+// App2 configuration
+static const char WIFI_SSID[] = "your_wifi_ssid";
+static const char WIFI_PASSWORD[] = "your_wifi_password";
+static const char SERVER_HOST[] = "192.168.1.10";
+static const uint16_t SERVER_PORT = 8000;
+static const char SERVER_PATH[] = "/api/gesture_event";
+
+// Trigger configuration (simple version)
+static const int TRIGGER_CLASS = 1;
+static const uint32_t COOLDOWN_MS = 2000;
+static const uint32_t NET_TIMEOUT_MS = 3000;
+static const uint32_t MODE_SERVER_BUDGET_MS = 8000;
+
 
 
 // maybe remove later 
@@ -49,6 +65,18 @@ static bool lcd_ready = false;
 enum State { STARTING, RECORDING, INFERING, WAITING };
 State current_state = STARTING;
 int state_counter = 0;
+
+enum AppMode { MODE_GESTURE, MODE_SERVER };
+static AppMode mode = MODE_GESTURE;
+
+enum NetState { NET_IDLE, NET_WIFI, NET_SEND, NET_DONE, NET_ERR };
+static NetState net_state = NET_IDLE;
+
+static uint32_t last_trigger_time_ms = 0;
+static int last_trigger_class = -1;
+static const char* last_trigger_label = "unknown";
+
+static bool wifi_ready = false;
 
 // Preprocessing functions
 void lowpass_filter(float* x, int length, int window) {
@@ -138,6 +166,31 @@ static void fatal_error(const char* msg) {
         }
         sleep_ms(250);
     }
+}
+
+static inline uint32_t now_ms(void) {
+    return to_ms_since_boot(get_absolute_time());
+}
+
+static bool ensure_wifi_connected(void) {
+    if (wifi_ready) {
+        return true;
+    }
+    if (cyw43_arch_init()) {
+        printf("[APP2] Wi-Fi init failed\n");
+        return false;
+    }
+    cyw43_arch_enable_sta_mode();
+    printf("[APP2] connecting to Wi-Fi...\n");
+    int rc = cyw43_arch_wifi_connect_timeout_ms(
+        WIFI_SSID, WIFI_PASSWORD, CYW43_AUTH_WPA2_AES_PSK, 30000);
+    if (rc != 0) {
+        printf("[APP2] Wi-Fi connect failed: %d\n", rc);
+        return false;
+    }
+    printf("[APP2] Wi-Fi connected\n");
+    wifi_ready = true;
+    return true;
 }
 
 
@@ -264,7 +317,7 @@ int main(void)
 
     while (true) {
         // printf("Entering main loop iteration, state: %d\n", current_state);
-        
+        if (mode == MODE_GESTURE) {
         switch (current_state) {
             case STARTING:
                 countdown(3); // 3-second countdown
@@ -439,12 +492,24 @@ int main(void)
                 } else {
                     const char* label = (result >= 0 && result < kCategoryCount) ? kCategoryLabels[result] : "unknown";
                     printf("Predicted Gesture: %d (%s)\n", result, label);
+                    printf("[APP1] class=%d conf=%.2f\n", result, 0.0f);
                     // Display gesture on LCD
                     char str[32];
                     snprintf(str, sizeof(str), "Gesture: %s", label);
                     GUI_DisString_EN(10, 100, str, &Font24, WHITE, BLACK);
                     // Clear inference indicator
                     GUI_DisString_EN(10, 80, "           ", &Font16, WHITE, BLACK);
+
+                    uint32_t now = now_ms();
+                    bool in_cooldown = (now - last_trigger_time_ms) < COOLDOWN_MS;
+                    if (!in_cooldown && result == TRIGGER_CLASS) {
+                        last_trigger_time_ms = now;
+                        last_trigger_class = result;
+                        last_trigger_label = label;
+                        printf("[TRIGGER] fired\n");
+                        mode = MODE_SERVER;
+                        net_state = NET_IDLE;
+                    }
                 }
 
                 current_state = WAITING;
@@ -459,6 +524,71 @@ int main(void)
                     state_counter = 0;
                 }
                 break;
+        }
+        } else {
+            static uint32_t net_start_ms = 0;
+            if (net_state == NET_IDLE) {
+                net_start_ms = now_ms();
+                printf("[APP2] connecting to server ...\n");
+                net_state = NET_WIFI;
+            }
+
+            if ((now_ms() - net_start_ms) > MODE_SERVER_BUDGET_MS) {
+                printf("[APP2] timeout/error -> back to APP1\n");
+                net_state = NET_ERR;
+            }
+
+            switch (net_state) {
+                case NET_WIFI:
+                    if (ensure_wifi_connected()) {
+                        net_state = NET_SEND;
+                    } else {
+                        net_state = NET_ERR;
+                    }
+                    break;
+                case NET_SEND: {
+                    char json[256];
+                    uint32_t t_ms = now_ms();
+                    int n = snprintf(
+                        json, sizeof(json),
+                        "{\"device_id\":\"pico_w\",\"t_ms\":%lu,\"trigger_class\":\"%s\",\"trigger_id\":%d}",
+                        (unsigned long)t_ms, last_trigger_label, last_trigger_class);
+                    if (n <= 0 || n >= (int)sizeof(json)) {
+                        printf("[APP2] payload build failed\n");
+                        net_state = NET_ERR;
+                        break;
+                    }
+                    HttpRequest request(std::string(SERVER_PATH),
+                                        std::string(SERVER_HOST),
+                                        SERVER_PORT);
+                    request.set_timeout_ms(NET_TIMEOUT_MS);
+                    request.set_body_raw(json, strlen(json));
+                    ResponseDataStr response = request.post();
+                    if (response.status_ok && response.y) {
+                        printf("[APP2] response message: %s\n", response.y);
+                        free(response.y);
+                        net_state = NET_DONE;
+                    } else {
+                        printf("[APP2] request failed\n");
+                        net_state = NET_ERR;
+                    }
+                    break;
+                }
+                case NET_DONE:
+                    printf("[APP2] done -> back to APP1\n");
+                    mode = MODE_GESTURE;
+                    current_state = STARTING;
+                    net_state = NET_IDLE;
+                    break;
+                case NET_ERR:
+                    printf("[APP2] timeout/error -> back to APP1\n");
+                    mode = MODE_GESTURE;
+                    current_state = STARTING;
+                    net_state = NET_IDLE;
+                    break;
+                default:
+                    break;
+            }
         }
 
         // Heartbeat: toggle LED and a small on-screen marker (loop alive ???)

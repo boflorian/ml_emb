@@ -37,6 +37,8 @@ include(pico_sdk_import.cmake)
 # project(pico-tflite-inference-test)
 project(${PROGRAM_NAME} C CXX ASM)
 
+set(PICO_CYW43_ARCH lwip_sys_freertos CACHE STRING "" FORCE)
+
 # initialize the Pico SDK
 pico_sdk_init()
 message("PICO_SDK_PATH: ${PICO_SDK_PATH}")
@@ -67,6 +69,7 @@ add_subdirectory(lib/pico-tflmicro)
 add_subdirectory(lib/config)
 add_subdirectory(lib/lcd)
 add_subdirectory(lib/font)
+add_subdirectory(lib/http_client)
 add_subdirectory(drivers/icm20948)
 
 include_directories(./src)
@@ -75,6 +78,7 @@ include_directories(./lib/pico-tflmicro)
 include_directories(./lib/config)
 include_directories(./lib/lcd)
 include_directories(./lib/font)
+include_directories(./lib/http_client)
 include_directories(./drivers/icm20948)
 include_directories(${CMAKE_CURRENT_LIST_DIR}/lib/pico-tflmicro/src)
 
@@ -84,6 +88,7 @@ target_link_libraries(
   lcd 
   font 
   config
+  http_client
   models
   icm20948
   pico_stdlib
@@ -92,6 +97,11 @@ target_link_libraries(
   pico_multicore 
   hardware_adc
   pico-tflmicro
+  pico_cyw43_arch_lwip_threadsafe_background
+  pico_lwip_http
+  pico_lwip_mbedtls
+  pico_mbedtls
+  pico_lwip_sntp
 )
 
 #pico_set_program_flash(program1 0x140000)
@@ -103,4 +113,3 @@ pico_enable_stdio_uart(main 1)
 
 # create map/bin/hex/uf2 file etc.
 pico_add_extra_outputs(main)
-
