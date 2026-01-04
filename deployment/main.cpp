@@ -45,7 +45,7 @@ static const char SERVER_PATH[] = "/api/gesture_event";
 
 // Trigger configuration (simple version)
 static const int TRIGGER_CLASS = 1;
-static const uint32_t COOLDOWN_MS = 2000;
+static const uint32_t COOLDOWN_MS = 0;
 static const uint32_t NET_TIMEOUT_MS = 3000;
 static const uint32_t MODE_SERVER_BUDGET_MS = 8000;
 
