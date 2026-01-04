@@ -37,7 +37,7 @@ include(pico_sdk_import.cmake)
 # project(pico-tflite-inference-test)
 project(${PROGRAM_NAME} C CXX ASM)
 
-set(PICO_CYW43_ARCH lwip_sys_freertos CACHE STRING "" FORCE)
+set(PICO_CYW43_ARCH lwip_poll CACHE STRING "" FORCE)
 
 # initialize the Pico SDK
 pico_sdk_init()
@@ -97,11 +97,8 @@ target_link_libraries(
   pico_multicore 
   hardware_adc
   pico-tflmicro
-  pico_cyw43_arch_lwip_threadsafe_background
+  pico_cyw43_arch_lwip_poll
   pico_lwip_http
-  pico_lwip_mbedtls
-  pico_mbedtls
-  pico_lwip_sntp
 )
 
 #pico_set_program_flash(program1 0x140000)

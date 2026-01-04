@@ -12,7 +12,6 @@
 
 #include "lwip/apps/httpd.h"
 #include "lwip/altcp_tls.h"
-#include "lwip/apps/sntp.h"
 #include "lwip/dns.h"
 #include "lwip/ip_addr.h"
 #include "lwip/altcp.h"
