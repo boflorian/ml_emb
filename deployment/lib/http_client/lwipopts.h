@@ -22,7 +22,7 @@
 #endif
 #define MEM_ALIGNMENT               4
 #ifndef MEM_SIZE
-#define MEM_SIZE                    10000
+#define MEM_SIZE                    9000
 #endif
 #ifndef MEMP_NUM_SYS_TIMEOUT
 #define MEMP_NUM_SYS_TIMEOUT        8
