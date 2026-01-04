@@ -48,7 +48,7 @@ static const int TRIGGER_CLASS = 1;
 static const uint32_t COOLDOWN_MS = 0;
 static const uint32_t NET_TIMEOUT_MS = 3000;
 static const uint32_t SERVER_SEND_INTERVAL_MS = 800;
-static const int SERVER_WINDOW_SAMPLES = 32;
+static const int SERVER_WINDOW_SAMPLES = 16;
 
 
 
@@ -645,6 +645,9 @@ int main(void)
             GUI_DisString_EN(10, 200, heartbeat_on ? "*" : " ", &Font16, WHITE, BLACK);
         }
 
+        if (wifi_ready) {
+            cyw43_arch_poll();
+        }
         sleep_ms(10); 
     }
     return 0;
