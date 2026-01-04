@@ -25,7 +25,7 @@
 #define MEM_SIZE                    10000
 #endif
 #ifndef MEMP_NUM_SYS_TIMEOUT
-#define MEMP_NUM_SYS_TIMEOUT        4
+#define MEMP_NUM_SYS_TIMEOUT        8
 #endif
 #ifndef LWIP_TIMERS
 #define LWIP_TIMERS                 1
@@ -33,7 +33,7 @@
 #ifndef SYS_LIGHTWEIGHT_PROT
 #define SYS_LIGHTWEIGHT_PROT        1
 #endif
-#define MEMP_NUM_TCP_SEG            6
+#define MEMP_NUM_TCP_SEG            10
 #define MEMP_NUM_ARP_QUEUE          2
 #define PBUF_POOL_SIZE              6
 #define PBUF_POOL_BUFSIZE           512
