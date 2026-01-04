@@ -46,9 +46,9 @@ static const char SERVER_PATH[] = "/api/gesture_event";
 // Trigger configuration (simple version)
 static const int TRIGGER_CLASS = 1;
 static const uint32_t COOLDOWN_MS = 0;
-static const uint32_t NET_TIMEOUT_MS = 3000;
-static const uint32_t SERVER_SEND_INTERVAL_MS = 800;
-static const int SERVER_WINDOW_SAMPLES = 16;
+static const uint32_t NET_TIMEOUT_MS = 8000;
+static const uint32_t SERVER_SEND_INTERVAL_MS = 1500;
+static const int SERVER_WINDOW_SAMPLES = 8;
 
 
 
