@@ -11,7 +11,6 @@
 #include "pico/async_context.h"
 
 #include "lwip/apps/httpd.h"
-#include "lwip/altcp_tls.h"
 #include "lwip/dns.h"
 #include "lwip/ip_addr.h"
 #include "lwip/altcp.h"

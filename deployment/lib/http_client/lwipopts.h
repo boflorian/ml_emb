@@ -69,8 +69,8 @@
 
 #define LWIP_HTTP_CLIENT            1
 #define LWIP_ALTCP                  1
-#define LWIP_ALTCP_TLS              1
-#define LWIP_ALTCP_TLS_MBEDTLS      1
+#define LWIP_ALTCP_TLS              0
+#define LWIP_ALTCP_TLS_MBEDTLS      0
 
 
 #ifndef NDEBUG
