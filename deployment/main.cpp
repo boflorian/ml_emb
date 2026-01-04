@@ -39,9 +39,9 @@ using namespace std;
 
 // App2 configuration
 #include "wifi_config.h"
-static const char SERVER_HOST[] = "192.168.178.101";
-static const uint16_t SERVER_PORT = 8000;
-static const char SERVER_PATH[] = "/api/gesture_event";
+static const char SERVER_HOST[] = WIFI_SERVER_HOST;
+static const uint16_t SERVER_PORT = WIFI_SERVER_PORT;
+static const char SERVER_PATH[] = WIFI_SERVER_PATH;
 
 // Trigger configuration (simple version)
 static const int TRIGGER_CLASS = 1;
