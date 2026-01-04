@@ -141,6 +141,10 @@
           <span class="pulse" id="pulse"></span>
           <span id="timestamp">--</span>
         </div>
+        <div class="label" style="margin-top: 18px;">System</div>
+        <div class="value" id="armedState">Disarmed</div>
+        <div class="label" style="margin-top: 8px;">Link</div>
+        <div class="value" id="connState">No Signal</div>
       </div>
     </div>
   </div>
@@ -150,6 +154,8 @@
     const statusText = document.getElementById("statusText");
     const pulse = document.getElementById("pulse");
     const tsEl = document.getElementById("timestamp");
+    const armedEl = document.getElementById("armedState");
+    const connEl = document.getElementById("connState");
 
     const alertLabels = new Set(["door_slam", "object_move"]);
     const warnLabels = new Set(["footsteps", "light_activity"]);
@@ -159,6 +165,18 @@
       messageEl.textContent = data.message || "No message.";
       const ts = data.ts ? new Date(data.ts * 1000) : null;
       tsEl.textContent = ts ? ts.toLocaleTimeString() : "--";
+
+      const armed = Boolean(data.armed);
+      const connected = Boolean(data.connected);
+      armedEl.textContent = armed ? "Armed" : "Disarmed";
+      connEl.textContent = connected ? "Connected" : "No Signal";
+
+      if (!armed) {
+        statusText.textContent = "Monitoring";
+        statusText.className = "ok";
+        pulse.className = "pulse";
+        return;
+      }
 
       if (alertLabels.has(data.label)) {
         statusText.textContent = "Alert";

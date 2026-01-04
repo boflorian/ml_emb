@@ -55,22 +55,22 @@ def ml_infer(features):
         flags.append("short_window")
         quality = 0.3
         label = "unknown"
-    elif rms_mag < 0.06:
+    elif rms_mag < 0.03:
         flags.append("quiet")
         quality = 0.8
         label = "idle"
-    elif peak_mag > 0.9 or rms_mag > 0.45:
+    elif peak_mag > 0.6 or rms_mag > 0.3:
         flags.append("impact")
         quality = 0.85
-        label = "door_slam"
-    elif peak_mag > 0.5 or rms_mag > 0.28:
+        label = "strong movement"
+    elif peak_mag > 0.35 or rms_mag > 0.18:
         flags.append("moving")
         quality = 0.8
-        label = "footsteps"
-    elif peak_mag > 0.25 or rms_mag > 0.15:
+        label = "weak movement"
+    elif peak_mag > 0.2 or rms_mag > 0.1:
         flags.append("shift")
         quality = 0.75
-        label = "object_move"
+        label = "weak movement"
     else:
         flags.append("light")
         quality = 0.7
@@ -148,6 +148,8 @@ def healthcheck():
 def activity_status():
     payload = dict(LAST_EVENT)
     payload["armed"] = ARMED
+    now = int(time.time())
+    payload["connected"] = (now - payload.get("ts", 0)) <= 5
     return jsonify(payload)
 
 @app.get("/dashboard")
