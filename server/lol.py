@@ -51,18 +51,29 @@ def main():
     emit("Usecase: room activity security monitor", 0.8)
     emit("Mode: disarmed", 0.7)
 
-    # Idle window (local only, no server contact)
+    emit("Waiting for trigger...", 2.5)
+
+    # Initial no-activity sample (disarmed)
     emit("Recording... (3s window)", 3.2)
-    emit("[DBG] Max magnitude idx=35 val=0.09 | active_start=6 (thr=0.08g)", 0.6)
+    emit("[DBG] Max magnitude idx=12 val=0.06 | active_start=5 (thr=0.08g)", 0.6)
     emit("[DBG] Window start=0 end=255 (size=256)", 0.5)
-    emit("[DBG] Window floats: 0.03 -0.02 0.01 0.00 -0.01 0.02 0.01 0.00 0.00 0.01 ", 0.4)
-    emit("[DBG] Window quantized: 0 0 1 -1 0 1 0 0 0 0 ", 0.4)
-    emit("[FEAT] rms=0.04 peak=0.09 crest=2.25 mean=0.00", 0.4)
+    emit("[DBG] Window floats: 0.01 -0.01 0.00 0.00 -0.01 0.01 0.00 0.00 0.00 0.01 ", 0.4)
+    emit("[DBG] Window quantized: 0 0 0 0 0 0 0 0 0 0 ", 0.4)
+    emit("[FEAT] rms=0.03 peak=0.06 crest=2.00 mean=0.00", 0.4)
     emit("Invocation started", 1.1)
     emit("Invocation finished", 0.5)
     emit("Predicted State: idle", 0.4)
-    emit("[APP1] class=idle conf=0.86", 0.4)
-    emit("Waiting... (2s)", 2.1)
+    emit("[APP1] class=idle conf=0.88", 0.4)
+    emit("[APP2] connecting to server ...", 1.0)
+    emit("[APP2] Wi-Fi connected", 0.9)
+    idle_payload = {
+        "trigger_class": "activity",
+        "trigger_conf": 0.88,
+        "features": [1.0, 0.0, 0.0, 0.99, 0.01, 0.0, 1.01, -0.01, 0.0],
+        "meta": {"fs": 100, "win": 32, "room": "lab-1", "armed": False},
+    }
+    log_server_response(post_event(idle_payload))
+    emit("[APP2] done -> back to APP1", 0.8)
 
     # Activation gesture: ring -> arm + connect to server
     emit("Recording... (3s window)", 3.2)
@@ -80,38 +91,62 @@ def main():
     arm_payload = {
         "trigger_class": "ring",
         "trigger_conf": 0.9,
-        "features": [0.12, 0.3, 0.6, 0.4, 0.2, 0.5, 0.4, 0.2],
-        "meta": {"fs": 400, "win": 256, "room": "lab-1"},
+        "features": [1.0, 0.0, 0.0, 1.02, -0.02, 0.0, 0.98, 0.02, 0.0],
+        "meta": {"fs": 100, "win": 32, "room": "lab-1"},
     }
     log_server_response(post_event(arm_payload))
-    emit("[APP2] done -> back to APP1", 0.8)
+    emit("[APP2] armed, streaming mode", 0.8)
     emit("Mode: armed", 0.8)
 
-    # Footsteps activity
+    # Wait 2 seconds, then light movement
     emit("Monitoring...", 2.0)
     emit("Recording... (3s window)", 3.2)
-    emit("[DBG] Max magnitude idx=78 val=0.95 | active_start=14 (thr=0.08g)", 0.6)
+    emit("[DBG] Max magnitude idx=78 val=0.48 | active_start=14 (thr=0.08g)", 0.6)
     emit("[DBG] Window start=0 end=255 (size=256)", 0.5)
-    emit("[DBG] Window floats: 0.08 0.10 0.15 -0.03 0.20 0.12 -0.08 0.05 0.11 0.04 ", 0.4)
-    emit("[DBG] Window quantized: 1 1 2 -1 3 2 -1 1 1 0 ", 0.4)
-    emit("[FEAT] rms=0.42 peak=1.10 crest=2.62 mean=0.02", 0.4)
+    emit("[DBG] Window floats: 0.02 0.04 0.06 -0.01 0.07 0.04 -0.03 0.02 0.05 0.02 ", 0.4)
+    emit("[DBG] Window quantized: 0 0 1 0 1 1 0 0 1 0 ", 0.4)
+    emit("[FEAT] rms=0.16 peak=0.48 crest=3.00 mean=0.01", 0.4)
     emit("Invocation started", 1.2)
     emit("Invocation finished", 0.5)
-    emit("Predicted State: footsteps", 0.4)
-    emit("[APP1] class=footsteps conf=0.78", 0.4)
+    emit("Predicted State: weak", 0.4)
+    emit("[APP1] class=weak conf=0.72", 0.4)
     emit("[TRIGGER] activity", 0.3)
     emit("[APP2] connecting to server ...", 1.1)
     emit("[APP2] Wi-Fi connected", 0.9)
-    footsteps_payload = {
+    light_payload = {
         "trigger_class": "activity",
-        "trigger_conf": 0.78,
-        "features": [0.08, 0.18, 0.32, 0.25, 0.12, 0.22, 0.31, 0.16],
-        "meta": {"fs": 400, "win": 256, "room": "lab-1"},
+        "trigger_conf": 0.72,
+        "features": [1.2, 0.0, 0.0, 1.15, 0.0, 0.0, 1.1, 0.0, 0.0],
+        "meta": {"fs": 100, "win": 32, "room": "lab-1", "armed": True},
     }
-    log_server_response(post_event(footsteps_payload))
-    emit("[APP2] done -> back to APP1", 0.8)
+    log_server_response(post_event(light_payload))
+    emit("[APP2] continue monitoring", 0.8)
 
-    # Door slam activity
+    # Quiet window to return to secure while armed
+    emit("Monitoring...", 2.0)
+    emit("Recording... (3s window)", 3.2)
+    emit("[DBG] Max magnitude idx=16 val=0.06 | active_start=5 (thr=0.08g)", 0.6)
+    emit("[DBG] Window start=0 end=255 (size=256)", 0.5)
+    emit("[DBG] Window floats: 0.01 -0.01 0.00 0.00 -0.01 0.01 0.00 0.00 0.00 0.01 ", 0.4)
+    emit("[DBG] Window quantized: 0 0 0 0 0 0 0 0 0 0 ", 0.4)
+    emit("[FEAT] rms=0.03 peak=0.06 crest=2.00 mean=0.00", 0.4)
+    emit("Invocation started", 1.1)
+    emit("Invocation finished", 0.5)
+    emit("Predicted State: idle", 0.4)
+    emit("[APP1] class=idle conf=0.90", 0.4)
+    emit("[TRIGGER] activity", 0.3)
+    emit("[APP2] connecting to server ...", 1.0)
+    emit("[APP2] Wi-Fi connected", 0.9)
+    idle_between_payload = {
+        "trigger_class": "activity",
+        "trigger_conf": 0.9,
+        "features": [1.0, 0.0, 0.0, 0.99, 0.01, 0.0, 1.01, -0.01, 0.0],
+        "meta": {"fs": 100, "win": 32, "room": "lab-1", "armed": True},
+    }
+    log_server_response(post_event(idle_between_payload))
+    emit("[APP2] continue monitoring", 0.8)
+
+    # Wait 2 seconds, then strong movement
     emit("Monitoring...", 2.0)
     emit("Recording... (3s window)", 3.2)
     emit("[DBG] Max magnitude idx=142 val=3.40 | active_start=9 (thr=0.08g)", 0.6)
@@ -121,44 +156,19 @@ def main():
     emit("[FEAT] rms=0.46 peak=3.40 crest=7.39 mean=0.01", 0.4)
     emit("Invocation started", 1.3)
     emit("Invocation finished", 0.5)
-    emit("Predicted State: door_slam", 0.4)
-    emit("[APP1] class=door_slam conf=0.90", 0.4)
+    emit("Predicted State: strong", 0.4)
+    emit("[APP1] class=strong conf=0.90", 0.4)
     emit("[TRIGGER] activity", 0.3)
     emit("[APP2] connecting to server ...", 1.1)
     emit("[APP2] Wi-Fi connected", 0.9)
     slam_payload = {
         "trigger_class": "activity",
         "trigger_conf": 0.9,
-        "features": [0.12, 0.02, 0.08, 0.01, 0.02, 0.05, 0.09, 3.4],
-        "meta": {"fs": 400, "win": 256, "room": "lab-1"},
+        "features": [1.8, 0.0, 0.0, 1.6, 0.0, 0.0, 1.7, 0.0, 0.0],
+        "meta": {"fs": 100, "win": 32, "room": "lab-1", "armed": True},
     }
     log_server_response(post_event(slam_payload))
-    emit("[APP2] done -> back to APP1", 0.8)
-
-    # Return to secure after a quiet window
-    emit("Monitoring...", 2.5)
-    emit("Recording... (3s window)", 3.2)
-    emit("[DBG] Max magnitude idx=18 val=0.07 | active_start=5 (thr=0.08g)", 0.6)
-    emit("[DBG] Window start=0 end=255 (size=256)", 0.5)
-    emit("[DBG] Window floats: 0.01 -0.01 0.00 0.00 -0.01 0.01 0.00 0.00 0.00 0.01 ", 0.4)
-    emit("[DBG] Window quantized: 0 0 0 0 0 0 0 0 0 0 ", 0.4)
-    emit("[FEAT] rms=0.03 peak=0.07 crest=2.10 mean=0.00", 0.4)
-    emit("Invocation started", 1.1)
-    emit("Invocation finished", 0.5)
-    emit("Predicted State: idle", 0.4)
-    emit("[APP1] class=idle conf=0.90", 0.4)
-    emit("[TRIGGER] activity", 0.3)
-    emit("[APP2] connecting to server ...", 1.0)
-    emit("[APP2] Wi-Fi connected", 0.8)
-    quiet_payload = {
-        "trigger_class": "activity",
-        "trigger_conf": 0.9,
-        "features": [0.01, 0.02, 0.01, 0.0, 0.02, 0.01, 0.0, 0.01],
-        "meta": {"fs": 400, "win": 256, "room": "lab-1"},
-    }
-    log_server_response(post_event(quiet_payload))
-    emit("[APP2] done -> back to APP1", 0.8)
-    emit("Status: secure", 0.8)
+    emit("[APP2] continue monitoring", 0.8)
 
 
 if __name__ == "__main__":

@@ -62,19 +62,19 @@ def ml_infer(features):
     elif peak_mag > 0.6 or rms_mag > 0.3:
         flags.append("impact")
         quality = 0.85
-        label = "strong movement"
-    elif peak_mag > 0.35 or rms_mag > 0.18:
-        flags.append("moving")
-        quality = 0.8
-        label = "weak movement"
-    elif peak_mag > 0.2 or rms_mag > 0.1:
-        flags.append("shift")
-        quality = 0.75
-        label = "weak movement"
+        label = "strong"
+    #elif peak_mag > 0.35 or rms_mag > 0.18:
+    #    flags.append("moving")
+    #    quality = 0.8
+    #    label = "weak movement"
+    #elif peak_mag > 0.2 or rms_mag > 0.1:
+    #    flags.append("shift")
+    #    quality = 0.75
+    #    label = "weak movement"
     else:
         flags.append("light")
         quality = 0.7
-        label = "light_activity"
+        label = "weak"
 
     return {
         "quality": clamp01(quality),
@@ -129,15 +129,11 @@ def fallback_message(label, flags):
     if "short_window" in flags or "no_features" in flags:
         return "Not enough data. Hold steady for one more window."
     if label == "idle":
-        return "Room is quiet. Monitoring continues."
-    if label == "footsteps":
-        return "Movement detected. Check the area."
-    if label == "object_move":
-        return "Object shift detected. Verify the room."
-    if label == "door_slam":
-        return "Strong impact detected. Possible entry."
-    if label == "light_activity":
-        return "Light activity detected. Stay alert."
+        return "Monitoring. Room is quiet."
+    if label == "weak":
+        return "Watch. Light movement detected."
+    if label == "strong":
+        return "Alert. Strong movement detected."
     return "Activity detected. Please check."
 
 @app.get("/api/v1/healthcheck")
@@ -146,10 +142,14 @@ def healthcheck():
 
 @app.get("/api/activity_status")
 def activity_status():
+    global ARMED
     payload = dict(LAST_EVENT)
-    payload["armed"] = ARMED
     now = int(time.time())
-    payload["connected"] = (now - payload.get("ts", 0)) <= 5
+    connected = (now - payload.get("ts", 0)) <= 5
+    if not connected:
+        ARMED = False
+    payload["connected"] = connected
+    payload["armed"] = ARMED
     return jsonify(payload)
 
 @app.get("/dashboard")
@@ -188,12 +188,10 @@ def gesture_event():
     message = llm_infer(trigger_class, trigger_conf, ml_out, meta)
 
     command = None
-    if ARMED and ml_out.get("label") == "door_slam":
-        command = {"type": "display", "text": "Possible entry"}
-    elif ARMED and ml_out.get("label") == "object_move":
-        command = {"type": "display", "text": "Check room"}
-    elif ARMED and ml_out.get("label") == "footsteps":
-        command = {"type": "display", "text": "Movement"}
+    if ARMED and ml_out.get("label") == "strong":
+        command = {"type": "display", "text": "Alert"}
+    elif ARMED and ml_out.get("label") == "weak":
+        command = {"type": "display", "text": "Watch"}
 
     LAST_EVENT.update(
         {

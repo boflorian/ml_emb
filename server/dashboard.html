@@ -128,8 +128,8 @@
     </div>
     <div class="status">
       <div class="card">
-        <div class="label">Latest Activity</div>
-        <div class="value" id="label">Waiting...</div>
+        <div class="label">Last Activity</div>
+        <div class="value" id="label">No activity yet</div>
         <div class="message" id="message">No data yet.</div>
       </div>
       <div class="card">
@@ -157,13 +157,13 @@
     const armedEl = document.getElementById("armedState");
     const connEl = document.getElementById("connState");
 
-    const alertLabels = new Set(["door_slam", "object_move"]);
-    const warnLabels = new Set(["footsteps", "light_activity"]);
+    const alertLabels = new Set(["strong"]);
+    const warnLabels = new Set(["weak"]);
 
     function render(data) {
-      labelEl.textContent = data.label || "unknown";
-      messageEl.textContent = data.message || "No message.";
       const ts = data.ts ? new Date(data.ts * 1000) : null;
+      labelEl.textContent = ts ? ts.toLocaleTimeString() : "No activity yet";
+      messageEl.textContent = data.message || "No message.";
       tsEl.textContent = ts ? ts.toLocaleTimeString() : "--";
 
       const armed = Boolean(data.armed);
@@ -171,26 +171,23 @@
       armedEl.textContent = armed ? "Armed" : "Disarmed";
       connEl.textContent = connected ? "Connected" : "No Signal";
 
-      if (!armed) {
-        statusText.textContent = "Monitoring";
-        statusText.className = "ok";
-        pulse.className = "pulse";
-        return;
-      }
-
       if (alertLabels.has(data.label)) {
         statusText.textContent = "Alert";
         statusText.className = "alert";
         pulse.className = "pulse alert";
-      } else if (warnLabels.has(data.label)) {
+        return;
+      }
+
+      if (warnLabels.has(data.label)) {
         statusText.textContent = "Watch";
         statusText.className = "warn";
         pulse.className = "pulse warn";
-      } else {
-        statusText.textContent = "Secure";
-        statusText.className = "ok";
-        pulse.className = "pulse";
+        return;
       }
+
+      statusText.textContent = "Monitoring";
+      statusText.className = "ok";
+      pulse.className = "pulse";
     }
 
     async function poll() {
