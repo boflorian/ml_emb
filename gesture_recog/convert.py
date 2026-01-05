@@ -17,21 +17,45 @@ import shutil
 import sys
 
 
-def representative_dataset():
+GOOD_ROOT = Path("dataset_good")
+GOOD_CATEGORIES = ["negative", "ring", "slope", "wave"]
+WIN_CNN = 286
+
+
+def representative_dataset(dataset_root=GOOD_ROOT, win=WIN_CNN, max_samples=200):
     """
     Generator function for representative dataset used in quantization.
-    This should yield sample inputs that represent the data distribution.
-    For gesture recognition, use preprocessed IMU windows.
-    
-    After preprocessing (lowpass + Z-score normalization), data is approximately
-    in range [-3, 3] with mean=0 and std=1.
+    Uses preprocessed windows from dataset_good.
     """
     import numpy as np
-    for _ in range(100):  # 100 samples
-        # Shape: [1, 286, 3] to match model input
-        # Use normal distribution to match Z-score normalized data (mean=0, std=1)
-        sample = np.random.randn(1, 286, 3).astype(np.float32)
-        yield [sample]
+    from util.data_loader import parse_gesture_file
+
+    root = Path(dataset_root)
+    if not root.exists():
+        raise FileNotFoundError(f"Representative dataset root not found: {root}")
+
+    def to_fixed_len(x):
+        if x.shape[0] >= win:
+            return x[:win]
+        pad = np.zeros((win - x.shape[0], x.shape[1]), dtype=x.dtype)
+        return np.concatenate([x, pad], axis=0)
+
+    count = 0
+    for cls in GOOD_CATEGORIES:
+        cls_dir = root / cls
+        if not cls_dir.exists():
+            continue
+        for txt in sorted(cls_dir.glob("*.txt")):
+            for rec in parse_gesture_file(txt):
+                x = np.asarray(rec["data"], dtype=np.float32)
+                if x.size == 0:
+                    continue
+                x = to_fixed_len(x)
+                x = np.expand_dims(x, axis=0)  # [1, win, 3]
+                yield [x]
+                count += 1
+                if count >= max_samples:
+                    return
 
 
 def try_convert_from_keras(model, quantize=False): 
