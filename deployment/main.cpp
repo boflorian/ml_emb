@@ -2,12 +2,14 @@
 #include<iostream>
 #include <cstdlib> 
 #include <iostream>
+#include <string>
 #include <cstring>
 #include <stdio.h>
 
 #include "pico/stdlib.h"
 #include "pico/multicore.h"
 #include "pico/sync.h"
+#include "pico/cyw43_arch.h"
 #include "hardware/watchdog.h"
 #include "hardware/sync.h"
 
@@ -18,6 +20,7 @@
 
 #include "model.h"
 #include "model_settings.h"
+#include "request.hpp"
 
 // For IMU
 #include "icm20948.h"
@@ -34,6 +37,19 @@ using namespace std;
 #define IMU_FEATURES 3          // ax, ay, az (match lab_0_1 data flow)
 #define ACCEL_SCALE (1.0f / 16384.0f)
 
+// App2 configuration
+#include "wifi_config.h"
+static const char SERVER_HOST[] = WIFI_SERVER_HOST;
+static const uint16_t SERVER_PORT = WIFI_SERVER_PORT;
+static const char SERVER_PATH[] = WIFI_SERVER_PATH;
+
+// Trigger configuration (simple version)
+static const int TRIGGER_CLASS = 1;
+static const uint32_t COOLDOWN_MS = 0;
+static const uint32_t NET_TIMEOUT_MS = 8000;
+static const uint32_t SERVER_SEND_INTERVAL_MS = 1500;
+static const int SERVER_WINDOW_SAMPLES = 8;
+
 
 
 // maybe remove later 
@@ -49,6 +65,20 @@ static bool lcd_ready = false;
 enum State { STARTING, RECORDING, INFERING, WAITING };
 State current_state = STARTING;
 int state_counter = 0;
+
+enum AppMode { MODE_GESTURE, MODE_SERVER };
+static AppMode mode = MODE_GESTURE;
+
+enum NetState { NET_IDLE, NET_WIFI, NET_SEND, NET_DONE, NET_ERR };
+static NetState net_state = NET_IDLE;
+
+static uint32_t last_trigger_time_ms = 0;
+static int last_trigger_class = -1;
+static const char* last_trigger_label = "unknown";
+
+static bool wifi_ready = false;
+static bool armed = false;
+static bool send_arm_event = false;
 
 // Preprocessing functions
 void lowpass_filter(float* x, int length, int window) {
@@ -140,6 +170,32 @@ static void fatal_error(const char* msg) {
     }
 }
 
+static inline uint32_t now_ms(void) {
+    return to_ms_since_boot(get_absolute_time());
+}
+
+static bool ensure_wifi_connected(void) {
+    if (wifi_ready) {
+        return true;
+    }
+    if (cyw43_arch_init()) {
+        printf("[APP2] Wi-Fi init failed\n");
+        return false;
+    }
+    cyw43_arch_enable_sta_mode();
+    printf("[APP2] connecting to Wi-Fi...\n");
+    int rc = cyw43_arch_wifi_connect_timeout_ms(
+        WIFI_SSID, WIFI_PASSWORD, CYW43_AUTH_WPA2_AES_PSK, 30000);
+    if (rc != 0) {
+        printf("[APP2] Wi-Fi connect failed: %d\n", rc);
+        return false;
+    }
+    printf("[APP2] Wi-Fi connected\n");
+    wifi_ready = true;
+    return true;
+}
+
+
 
 int count_digits(int number) {
     if (number == 0) {
@@ -210,6 +266,11 @@ int main(void)
 
     // Keep the white background from init_gui()
 
+    // Pre-connect Wi-Fi so App2 can send immediately.
+    if (!ensure_wifi_connected()) {
+        printf("[APP2] Wi-Fi pre-connect failed (will retry on trigger)\n");
+    }
+
 
     // run core1 loop that handles user interface
     multicore_launch_core1(core1_entry);
@@ -252,7 +313,6 @@ int main(void)
     int loop_counter = 0;
     bool heartbeat_on = false;
     uint16_t backlight_level = 1000;
-
 #ifdef PICO_DEFAULT_LED_PIN
     gpio_init(PICO_DEFAULT_LED_PIN);
     gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
@@ -260,11 +320,12 @@ int main(void)
 #endif
 
     // Hardcoding the model size instead of including the header
-    constexpr size_t arena_size = 287512 + 1024; // Model size + buffer for interpreter
+    constexpr size_t arena_size = 81920; // Tensor size is 67876 -> safety margin 80 * 1024
+
 
     while (true) {
         // printf("Entering main loop iteration, state: %d\n", current_state);
-        
+        if (mode == MODE_GESTURE) {
         switch (current_state) {
             case STARTING:
                 countdown(3); // 3-second countdown
@@ -326,8 +387,8 @@ int main(void)
                     active_start = 0; // all quiet, fall back to start
                 }
 
-                printf("[DBG] Max magnitude idx=%d val=%.2f | active_start=%d (thr=%.2fg)\n",
-                       max_magnitude_index, max_magnitude, active_start, MOTION_THRESHOLD_G);
+                //] Max magnitude idx=%d val=%.2f | active_start=%d (thr=%.2fg)\n",
+                  //     max_magnitude_index, max_magnitude, active_start, MOTION_THRESHOLD_G);
                 
                 // Extract INFERENCE_WINDOW samples prioritizing active region
                 const int half_window = INFERENCE_WINDOW / 2;
@@ -340,7 +401,7 @@ int main(void)
                     start_sample = end_sample - INFERENCE_WINDOW + 1;
                     if(start_sample < 0) start_sample = 0;
                 }
-                printf("[DBG] Window start=%d end=%d (size=%d)\n", start_sample, end_sample, INFERENCE_WINDOW);
+                //printf("[DBG] Window start=%d end=%d (size=%d)\n", start_sample, end_sample, INFERENCE_WINDOW);
                 
                 const int inference_elements = INFERENCE_WINDOW * IMU_FEATURES;
                 float inference_buffer_float[inference_elements];
@@ -384,10 +445,10 @@ int main(void)
                 // If not, we need to re-quantize the model properly
 
                 // Debug: print some preprocessed values (now Z-score normalized, ~[-3, 3])
-                printf("[DBG] Window floats: ");
-                for(int i = 0; i < 10 && i < inference_elements; i++) {
-                    printf("%.2f ", inference_buffer_float[i]);
-                }
+                //printf("[DBG] Window floats: ");
+                //for(int i = 0; i < 10 && i < inference_elements; i++) {
+                //    printf("%.2f ", inference_buffer_float[i]);
+                //}
                 printf("\n");
                 
                 // Quantize to int8 (signed) - model uses INT8 quantization with zero_point around -1
@@ -398,11 +459,11 @@ int main(void)
                     inference_buffer[i] = (int8_t)std::max(-128, std::min(127, quantized));
                 }
 
-                printf("[DBG] Window quantized: ");
-                for(int i = 0; i < 10 && i < inference_elements; i++) {
-                    printf("%d ", inference_buffer[i]);
-                }
-                printf("\n");
+                //printf("[DBG] Window quantized: ");
+                //for(int i = 0; i < 10 && i < inference_elements; i++) {
+                //    printf("%d ", inference_buffer[i]);
+                //}
+                //printf("\n");
                 
                 // Copy to model input (cast to uint8_t* for memcpy, but data is int8)
                 const int bytes_to_copy = byte_size < inference_elements ? byte_size : inference_elements;
@@ -414,7 +475,7 @@ int main(void)
 
                 // Run inference
                 int result = ml_model.predict();
-                printf("Inference result: %d\n", result);
+                // printf("Inference result: %d\n", result);
                 
                 // If classified as negative, take the next most likely gesture
                 //if (result == 0) {
@@ -438,13 +499,27 @@ int main(void)
                     GUI_DisString_EN(10, 80, "Inference failed", &Font16, WHITE, BLACK);
                 } else {
                     const char* label = (result >= 0 && result < kCategoryCount) ? kCategoryLabels[result] : "unknown";
-                    printf("Predicted Gesture: %d (%s)\n", result, label);
+                    // printf("Predicted Gesture: %d (%s)\n", result, label);
+                    printf("[APP1] class=%d conf=%.2f\n", result, 0.0f);
                     // Display gesture on LCD
                     char str[32];
                     snprintf(str, sizeof(str), "Gesture: %s", label);
                     GUI_DisString_EN(10, 100, str, &Font24, WHITE, BLACK);
                     // Clear inference indicator
                     GUI_DisString_EN(10, 80, "           ", &Font16, WHITE, BLACK);
+
+                    uint32_t now = now_ms();
+                    bool in_cooldown = (now - last_trigger_time_ms) < COOLDOWN_MS;
+                    if (!in_cooldown && result == TRIGGER_CLASS) {
+                        last_trigger_time_ms = now;
+                        last_trigger_class = result;
+                        last_trigger_label = label;
+                        printf("[TRIGGER] fired\n");
+                        armed = true;
+                        send_arm_event = true;
+                        mode = MODE_SERVER;
+                        net_state = NET_IDLE;
+                    }
                 }
 
                 current_state = WAITING;
@@ -460,6 +535,102 @@ int main(void)
                 }
                 break;
         }
+        } else {
+            static float stream_buffer[SERVER_WINDOW_SAMPLES * IMU_FEATURES];
+            static int stream_index = 0;
+            static uint32_t last_send_ms = 0;
+
+            if (!armed) {
+                mode = MODE_GESTURE;
+                current_state = STARTING;
+                net_state = NET_IDLE;
+            } else {
+                if (net_state == NET_IDLE) {
+                    printf("[APP2] streaming to server ...\n");
+                    net_state = NET_WIFI;
+                }
+
+                if (net_state == NET_WIFI) {
+                    if (!ensure_wifi_connected()) {
+                        printf("[APP2] Wi-Fi not ready\n");
+                        net_state = NET_ERR;
+                    } else {
+                        net_state = NET_SEND;
+                    }
+                }
+
+                if (net_state == NET_SEND) {
+                    IMU_ST_SENSOR_DATA gyro, accel;
+                    imuDataAccGyrGet(&gyro, &accel);
+                    const int write_offset = stream_index * IMU_FEATURES;
+                    stream_buffer[write_offset + 0] = (float)accel.s16X * ACCEL_SCALE;
+                    stream_buffer[write_offset + 1] = (float)accel.s16Y * ACCEL_SCALE;
+                    stream_buffer[write_offset + 2] = (float)accel.s16Z * ACCEL_SCALE;
+                    stream_index++;
+
+                    uint32_t now = now_ms();
+                    if (stream_index >= SERVER_WINDOW_SAMPLES &&
+                        (now - last_send_ms) >= SERVER_SEND_INTERVAL_MS) {
+                        static char json[2048];
+                        const char* trig = send_arm_event ? "ring" : "activity";
+                        int n = snprintf(
+                            json, sizeof(json),
+                            "{\"device_id\":\"pico_w\",\"t_ms\":%lu,"
+                            "\"trigger_class\":\"%s\",\"trigger_conf\":1.0,"
+                            "\"samples\":[",
+                            (unsigned long)now, trig);
+                        if (n <= 0 || n >= (int)sizeof(json)) {
+                            printf("[APP2] payload build failed\n");
+                            net_state = NET_ERR;
+                        } else {
+                            int pos = n;
+                            for (int i = 0; i < SERVER_WINDOW_SAMPLES * IMU_FEATURES; i++) {
+                                int written = snprintf(
+                                    json + pos, sizeof(json) - pos,
+                                    "%s%.4f",
+                                    (i == 0 ? "" : ","),
+                                    stream_buffer[i]);
+                                if (written <= 0 || written >= (int)(sizeof(json) - pos)) {
+                                    break;
+                                }
+                                pos += written;
+                            }
+                            int tail = snprintf(
+                                json + pos, sizeof(json) - pos,
+                                "],\"meta\":{\"fs\":100,\"win\":%d,\"armed\":true}}",
+                                SERVER_WINDOW_SAMPLES);
+                            if (tail <= 0 || tail >= (int)(sizeof(json) - pos)) {
+                                printf("[APP2] payload build failed\n");
+                                net_state = NET_ERR;
+                            } else {
+                                HttpRequest request(std::string(SERVER_PATH),
+                                                    std::string(SERVER_HOST),
+                                                    SERVER_PORT);
+                                request.set_timeout_ms(NET_TIMEOUT_MS);
+                                request.set_body_raw(json, strlen(json));
+                                ResponseDataStr response = request.post();
+                                if (response.status_ok && response.y) {
+                                    printf("[APP2] response message: %s\n", response.y);
+                                } else {
+                                    printf("[APP2] request failed\n");
+                                }
+                                send_arm_event = false;
+                                stream_index = 0;
+                                last_send_ms = now;
+                            }
+                        }
+                    }
+                }
+
+                if (net_state == NET_ERR) {
+                    printf("[APP2] timeout/error -> back to APP1\n");
+                    armed = false;
+                    mode = MODE_GESTURE;
+                    current_state = STARTING;
+                    net_state = NET_IDLE;
+                }
+            }
+        }
 
         // Heartbeat: toggle LED and a small on-screen marker (loop alive ???)
         if ((loop_counter++ % 50) == 0) {
@@ -474,6 +645,9 @@ int main(void)
             GUI_DisString_EN(10, 200, heartbeat_on ? "*" : " ", &Font16, WHITE, BLACK);
         }
 
+        if (wifi_ready) {
+            cyw43_arch_poll();
+        }
         sleep_ms(10); 
     }
     return 0;
